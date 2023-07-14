@@ -5,8 +5,8 @@ impl SyncmerParameters {
     fn pick_bits(&self, size: usize) -> u32 {
         let estimated_number_of_randstrobes = size / (self.k - self.s + 1);
         // Two randstrobes per bucket on average
-        let b = (estimated_number_of_randstrobes.log2() as u32 - 1).clamp(8, 31)
-        //clamp(static_cast<int>(log2(estimated_number_of_randstrobes)) - 1, 8, 31);
+        // TOOD checked_ilog2 or ilog2
+        ((estimated_number_of_randstrobes as f64).log2() as u32 - 1).clamp(8, 31)
     }
 }
 
