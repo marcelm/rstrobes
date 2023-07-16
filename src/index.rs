@@ -1,12 +1,34 @@
-use crate::strobes::SyncmerIterator;
+use std::cmp::max;
+use rayon::prelude::*;
+use crate::strobes::{RandstrobeParameters, SyncmerIterator, SyncmerParameters};
+use crate::fasta::RefSequence;
+
+/* Settings that influence index creation */
+pub struct IndexParameters {
+    canonical_read_length: usize,
+    pub syncmer: SyncmerParameters,
+    pub randstrobe: RandstrobeParameters,
+}
+
+impl IndexParameters {
+    pub fn new(canonical_read_length: usize, k: usize, s: usize, l: usize, u: usize, q: u64, max_dist: u8) -> Self {
+        let w_min = max(1, k / (k - s + 1) + l);
+        let w_max = k / (k - s + 1) + u;
+        IndexParameters {
+            canonical_read_length,
+            syncmer: SyncmerParameters::new(k, s),
+            randstrobe: RandstrobeParameters  { w_min, w_max, q, max_dist }
+        }
+    }
+}
 
 impl SyncmerParameters {
     /// Pick a suitable number of bits for indexing randstrobe start indices
-    fn pick_bits(&self, size: usize) -> u32 {
-        let estimated_number_of_randstrobes = size / (self.k - self.s + 1);
+    pub fn pick_bits(&self, size: usize) -> u8 {
+        let estimated_number_of_randstrobes = size / (self.k - self.s + 1) as usize;
         // Two randstrobes per bucket on average
         // TOOD checked_ilog2 or ilog2
-        ((estimated_number_of_randstrobes as f64).log2() as u32 - 1).clamp(8, 31)
+        ((estimated_number_of_randstrobes as f64).log2() as u32 - 1).clamp(8, 31) as u8
     }
 }
 
@@ -22,35 +44,29 @@ fn count_randstrobes(seq: &[u8], parameters: &IndexParameters) -> usize {
     }
 }
 
-/*
-std::vector<uint64_t> count_all_randstrobes(const References& references, const IndexParameters& parameters, size_t n_threads) {
-    std::vector<std::thread> workers;
-    std::atomic_size_t ref_index{0};
-
-    std::vector<uint64_t> counts;
-    counts.assign(references.size(), 0);
-
-    for (size_t i = 0; i < n_threads; ++i) {
-        workers.push_back(
-            std::thread(
-                [&ref_index](const References& references, const IndexParameters& parameters, std::vector<uint64_t>& counts) {
-                    while (true) {
-                        size_t j = ref_index.fetch_add(1);
-                        if (j >= references.size()) {
-                            break;
-                        }
-                        counts[j] = count_randstrobes(references.sequences[j], parameters);
-                    }
-                }, std::ref(references), std::ref(parameters), std::ref(counts))
-        );
-    }
-    for (auto& worker : workers) {
-        worker.join();
-    }
-
-    return counts;
+fn count_all_randstrobes(references: &Vec<RefSequence>, parameters: &IndexParameters) -> Vec<usize> {
+    references.par_iter().map(|refseq| count_randstrobes(&refseq.sequence, parameters)).collect()
 }
 
+pub struct StrobemerIndex<'a> {
+    references: &'a Vec<RefSequence>,
+    parameters: IndexParameters,
+    bits: u8,
+}
+
+impl<'a> StrobemerIndex<'a> {
+    pub fn new(references: &'a Vec<RefSequence>, parameters: IndexParameters, bits: Option<u8>) -> Self {
+        let total_reference_length = references.iter().map(|r| r.sequence.len()).sum();
+        let bits = bits.unwrap_or_else(|| parameters.syncmer.pick_bits(total_reference_length));
+
+        StrobemerIndex { references, parameters, bits }
+    }
+
+    pub fn populate(&self, filter_fraction: f32) {
+
+    }
+}
+/*
 void StrobemerIndex::populate(float f, size_t n_threads) {
     Timer count_hash;
     auto randstrobe_counts = count_all_randstrobes(references, parameters, n_threads);

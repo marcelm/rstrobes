@@ -2,6 +2,45 @@ use std::cmp::min;
 use std::collections::VecDeque;
 use xxhash_rust::xxh64::xxh64;
 
+pub struct SyncmerParameters {
+    pub k: usize,
+    pub s: usize,
+    pub t: usize,
+}
+
+impl SyncmerParameters {
+    pub fn new(k: usize, s: usize) -> Self {
+        SyncmerParameters { k, s, t: (k - s) / 2 + 1 }
+    }
+
+// TODO
+// void verify() const {
+//     if (k <= 7 || k > 32) {
+//         throw BadParameter("k not in [8,32]");
+//     }
+//     if (s > k) {
+//         throw BadParameter("s is larger than k");
+//     }
+//     if ((k - s) % 2 != 0) {
+//         throw BadParameter("(k - s) must be an even number to create canonical syncmers. Please set s to e.g. k-2, k-4, k-6, ...");
+//     }
+// }
+}
+
+pub struct RandstrobeParameters {
+    pub w_min: usize,
+    pub w_max: usize,
+    pub q: u64,
+    pub max_dist: u8,
+
+// TODO
+// void verify() const {
+//     if (max_dist > 255) {
+//         throw BadParameter("maximum seed length (-m <max_dist>) is larger than 255");
+//     }
+// }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Syncmer {
     hash: u64,
@@ -154,13 +193,6 @@ pub struct Randstrobe {
     pub strobe2_pos: usize,
 }
 
-pub struct RandstrobeParameters {
-    pub w_min: usize,
-    pub w_max: usize,
-    pub q: u64,
-    pub max_dist: usize,
-}
-
 pub struct RandstrobeIterator<'a> {
     parameters: &'a RandstrobeParameters,
     syncmers: VecDeque<Syncmer>,
@@ -191,7 +223,7 @@ impl<'a> Iterator for RandstrobeIterator<'a> {
             return None;
         }
         let strobe1 = self.syncmers[0];
-        let max_position = strobe1.position + self.parameters.max_dist;
+        let max_position = strobe1.position + self.parameters.max_dist as usize;
         let mut min_val = u64::MAX;
         let mut strobe2 = self.syncmers[0]; // Defaults if no nearby syncmer
 

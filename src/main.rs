@@ -1,16 +1,13 @@
-use std::cmp::{max, min};
-use std::collections::VecDeque;
-use std::{env, io};
-use std::collections::hash_map::RandomState;
+use std::io;
 use std::fs::File;
-use std::hash::Hasher;
-use std::io::{BufReader, BufWriter, BufRead, Error, Write};
+use std::io::{BufReader, BufWriter, Error, Write};
 use std::path::Path;
 use clap::Parser;
-use fxhash;
 use rstrobes::fastq::FastqReader;
-use rstrobes::strobes::{SyncmerIterator,RandstrobeIterator,RandstrobeParameters};
-use strobes::strobes::SyncmerIterator;
+use rstrobes::strobes::{RandstrobeIterator, RandstrobeParameters, SyncmerIterator};
+use rstrobes::fasta;
+use rstrobes::fasta::RefSequence;
+use rstrobes::index::{IndexParameters, StrobemerIndex};
 
 #[derive(Parser, Debug)]
 #[command(long_about = None)]
@@ -24,137 +21,77 @@ struct Args {
     ref_path: String,
 
     fastq_path: String,
-}
 
-#[derive(Debug)]
-struct FastaRecord {
-    name: String,
-    sequence: Vec<u8>,
-}
+    #[arg(short, default_value_t = 1)]
+    threads: usize,
 
-fn read_fasta<R: BufRead>(reader: &mut R) -> Result<Vec<FastaRecord>, Error> {
-    let mut records = Vec::<FastaRecord>::new();
-    let mut name = String::new();
-    let mut sequence = Vec::new();
-    let mut has_record = false;
-    for line in reader.lines() {
-        let line = line.unwrap();
-        let line = line.as_bytes();
-        if line.is_empty() {
-            continue;
-        }
-        if line[0] == b'>' {
-            if has_record {
-                records.push(FastaRecord{name, sequence});
-            }
-            name = String::from_utf8(line[1..].to_vec()).unwrap();
-            if let Some(i) = name.find(|c: char| c.is_ascii_whitespace()) {
-                name = name[..i].to_string();
-            }
-            sequence = Vec::new();
-            has_record = true;
-        } else {
-            sequence.extend(line);
-        }
-    }
-    if has_record {
-        records.push(FastaRecord{name, sequence});
-    }
+    // SeedingArguments(args::ArgumentParser& parser)
+    // : parser(parser)
+    // //n{parser, "INT", "Number of strobes [2]", {'n'}}
+    // , r{parser, "INT",
+    //     "Mean read length. This parameter is estimated from the first 500 "
+    //     "records in each read file. No need to set this explicitly unless you have a reason.", {'r'}}
+    // , m{parser, "INT",
+    //     "Maximum seed length. Defaults to r - 50. For reasonable values on -l and -u, "
+    //     "the seed length distribution is usually determined by parameters l and u. "
+    //     "Then, this parameter is only active in regions where syncmers are very sparse.", {'m'}}
+    // , k{parser, "INT", "Strobe length, has to be below 32. [20]", {'k'}}
+    // , l{parser, "INT", "Lower syncmer offset from k/(k-s+1). Start sample second syncmer k/(k-s+1) + l syncmers downstream [0]", {'l'}}
+    // , u{parser, "INT", "Upper syncmer offset from k/(k-s+1). End sample second syncmer k/(k-s+1) + u syncmers downstream [7]", {'u'}}
+    // , c{parser, "INT", "Bitcount length between 2 and 63. [8]", {'c'}}
+    // , s{parser, "INT",
+    //     "Submer size used for creating syncmers [k-4]. Only even numbers on k-s allowed. "
+    //     "A value of s=k-4 roughly represents w=10 as minimizer window [k-4]. "
+    //     "It is recommended not to change this parameter unless you have a good "
+    //     "understanding of syncmers as it will drastically change the memory usage and "
+    //     "results with non default values.", {'s'}}
+    // , bits{parser, "INT", ""
+    //     "[determined from reference size]", {'b'}}
 
-    Ok(records)
-}
+    /// No. of top bits of hash to use as bucket indices (8-31)
+    #[arg(short)]
+    bits: Option<u8>,
 
-struct SyncmerParameters {
-    k: u8,
-    s: u8,
-    t: u8,
-}
-
-impl SyncmerParameters {
-    pub fn new(k: u8, s: u8) -> Self {
-        SyncmerParameters { k, s, t: (k - s) / 2 + 1 }
-    }
-
-// TODO
-// void verify() const {
-//     if (k <= 7 || k > 32) {
-//         throw BadParameter("k not in [8,32]");
-//     }
-//     if (s > k) {
-//         throw BadParameter("s is larger than k");
-//     }
-//     if ((k - s) % 2 != 0) {
-//         throw BadParameter("(k - s) must be an even number to create canonical syncmers. Please set s to e.g. k-2, k-4, k-6, ...");
-//     }
-// }
-}
-
-struct RandstrobeParameters {
-    l: u32,
-    u: u32,
-    q: u64,
-    max_dist: usize,
-    w_min: u32,
-    w_max: u32,
-
-// TODO
-// void verify() const {
-//     if (max_dist > 255) {
-//         throw BadParameter("maximum seed length (-m <max_dist>) is larger than 255");
-//     }
-// }
-}
-
-/* Settings that influence index creation */
-struct IndexParameters {
-    canonical_read_length: u32,
-    syncmer: SyncmerParameters,
-    randstrobe: RandstrobeParameters,
-}
-
-impl IndexParameters {
-    pub fn new(canonical_read_length: u32, k: u8, s: u8, l: u32, u: u32, q: u64, max_dist: usize) -> Self {
-        let w_min = max(1, (k / (k - s + 1) + l)) as u32;
-        let w_max = (k / (k - s + 1) + u) as u32;
-        IndexParameters {
-            canonical_read_length,
-            syncmer: SyncmerParameters::new(k, s),
-            randstrobe: RandstrobeParameters { l, u, q, max_dist, w_min, w_max },
-        }
-    }
+    /// Top fraction of repetitive strobemers to filter out from sampling
+    #[arg(short, default_value_t = 0.0002)]
+    f: f32,
 }
 
 fn main() -> Result<(), Error> {
     let args = Args::parse();
+    rayon::ThreadPoolBuilder::new().num_threads(args.threads).build_global().unwrap();
     let path = Path::new(&args.ref_path);
     let f = File::open(path)?;
     let mut reader = BufReader::new(f);
-    let records = read_fasta(&mut reader).unwrap();
+    let references = fasta::read_fasta(&mut reader).unwrap();
     let k = 20usize;
     let s = 16usize;
 
     // IndexParameters(r=150, k=20, s=16, l=1, u=7, q=255, max_dist=80, t_syncmer=3, w_min=5, w_max=11)
     let parameters = IndexParameters::new(150, 20, 16, 1, 7, 255, 80);
-    debug_assert_eq!(parameters.w_min, 5);
-    debug_assert_eq!(parameters.w_max, 11);
+    debug_assert_eq!(parameters.randstrobe.w_min, 5);
+    debug_assert_eq!(parameters.randstrobe.w_max, 11);
 
-    let index = StrobemerIndex::new(references, index_parameters, bits);
-
-    index.populate(opt.f, opt.n_threads);
+    let index = StrobemerIndex::new(&references, parameters, args.bits);
+    index.populate(args.f);
 
     Ok(())
 }
 
-fn dumpstrobes(parameters: RandstrobeParameters) {
+fn dumpstrobes(references: &Vec<RefSequence>, parameters: IndexParameters) -> Result<(), Error> {
     let mut writer = BufWriter::new(io::stdout());
 
-    for record in &records {
+    let k = parameters.syncmer.k;
+    let s = parameters.syncmer.s;
+    for record in references {
         let name = &record.name;
         let mut syncmers = SyncmerIterator::new(&record.sequence, k, s, 3);
-        for randstrobe in RandstrobeIterator::new(&mut syncmers, &parameters) {
+        for randstrobe in RandstrobeIterator::new(&mut syncmers, &parameters.randstrobe) {
             writeln!(writer, "{}\t{}\t{}", name, randstrobe.strobe1_pos, randstrobe.strobe2_pos + k)?;
         }
     }
+
+    Ok(())
 }
 
 #[test]
