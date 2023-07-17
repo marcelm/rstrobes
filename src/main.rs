@@ -4,7 +4,8 @@ use std::io::{BufReader, BufWriter, Error, Write};
 use std::path::Path;
 use clap::Parser;
 use rstrobes::fastq::FastqReader;
-use rstrobes::strobes::{RandstrobeIterator, RandstrobeParameters, SyncmerIterator};
+use rstrobes::strobes::RandstrobeIterator;
+use rstrobes::syncmers::SyncmerIterator;
 use rstrobes::fasta;
 use rstrobes::fasta::RefSequence;
 use rstrobes::index::{IndexParameters, StrobemerIndex};
@@ -54,7 +55,7 @@ struct Args {
 
     /// Top fraction of repetitive strobemers to filter out from sampling
     #[arg(short, default_value_t = 0.0002)]
-    f: f32,
+    filter_fraction: f64,
 }
 
 fn main() -> Result<(), Error> {
@@ -72,8 +73,8 @@ fn main() -> Result<(), Error> {
     debug_assert_eq!(parameters.randstrobe.w_min, 5);
     debug_assert_eq!(parameters.randstrobe.w_max, 11);
 
-    let index = StrobemerIndex::new(&references, parameters, args.bits);
-    index.populate(args.f);
+    let mut index = StrobemerIndex::new(&references, parameters, args.bits);
+    index.populate(args.filter_fraction);
 
     Ok(())
 }
