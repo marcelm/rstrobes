@@ -12,7 +12,7 @@ pub fn map_single_end_read(seq: &Vec<u8>, index: &StrobemerIndex) {
 
     // Timer nam_timer;
     let (nonrepetitive_fraction, nams) = find_nams(&query_randstrobes, index);
-    println!("nonrepetitive fraction: {}", nonrepetitive_fraction);
+    println!("nonrepetitive fraction: {}. nams.len(): {}", nonrepetitive_fraction, nams.len());
     for nam in &nams {
         println!("{:?}", nam);
     }

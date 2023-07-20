@@ -48,7 +48,7 @@ struct IndexCreationStatistics {
 }
 
 #[derive(PartialEq,Eq,PartialOrd,Ord)]
-struct RefRandstrobe {
+pub struct RefRandstrobe {
     hash: RandstrobeHash,
     position: u32,
     /// packed representation of reference index and offset of second strobe
