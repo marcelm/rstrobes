@@ -1,4 +1,5 @@
 use crate::index::{IndexParameters, StrobemerIndex};
+use crate::nam::find_nams;
 use crate::revcomp::reverse_complement;
 use crate::strobes::RandstrobeIterator;
 use crate::syncmers::SyncmerIterator;
@@ -8,10 +9,14 @@ pub fn map_single_end_read(seq: &Vec<u8>, index: &StrobemerIndex) {
     //Timer strobe_timer;
     let query_randstrobes = randstrobes_query(&seq, &index.parameters);
     //statistics.tot_construct_strobemers += strobe_timer.duration();
-/*
-    // Find NAMs
+
     // Timer nam_timer;
-    auto [nonrepetitive_fraction, nams] = find_nams(query_randstrobes, index);
+    let (nonrepetitive_fraction, nams) = find_nams(&query_randstrobes, index);
+    println!("nonrepetitive fraction: {}", nonrepetitive_fraction);
+    for nam in &nams {
+        println!("{:?}", nam);
+    }
+/*
     // statistics.tot_find_nams += nam_timer.duration();
     /*
     TODO
@@ -39,17 +44,14 @@ pub fn map_single_end_read(seq: &Vec<u8>, index: &StrobemerIndex) {
     // statistics += details;
 
  */
-    for qr in query_randstrobes {
-        println!("qr: {:?}", qr);
-    }
 }
 
 #[derive(Debug)]
 pub struct QueryRandstrobe {
-    hash: u64,
-    start: usize,
-    end: usize,
-    is_reverse: bool,
+    pub hash: u64,
+    pub start: usize,
+    pub end: usize,
+    pub is_reverse: bool,
 }
 
 /// Generate randstrobes for a query sequence and its reverse complement.
