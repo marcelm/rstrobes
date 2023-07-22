@@ -7,3 +7,4 @@ pub mod index;
 pub mod mapper;
 pub mod nam;
 pub mod cigar;
+pub mod sam;

@@ -55,7 +55,7 @@ struct OpLen {
 }
 
 #[derive(Default,Debug)]
-struct Cigar {
+pub struct Cigar {
     ops: Vec<OpLen>,
 }
 

@@ -81,7 +81,7 @@ fn main() -> Result<(), Error> {
     for record in FastqReader::new(f) {
         let record = record?;
         println!("Processing record {}", record.name);
-        map_single_end_read(&record.sequence, &index);
+        map_single_end_read(&record.sequence, &record.name, &index);
     }
 
     Ok(())

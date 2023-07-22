@@ -4,7 +4,7 @@ use crate::revcomp::reverse_complement;
 use crate::strobes::RandstrobeIterator;
 use crate::syncmers::SyncmerIterator;
 
-pub fn map_single_end_read(seq: &Vec<u8>, index: &StrobemerIndex) {
+pub fn map_single_end_read(seq: &Vec<u8>, name: &String, index: &StrobemerIndex) -> Vec<SamRecord> {
     //Details details;
     //Timer strobe_timer;
     let query_randstrobes = randstrobes_query(&seq, &index.parameters);
@@ -41,15 +41,17 @@ pub fn map_single_end_read(seq: &Vec<u8>, index: &StrobemerIndex) {
     //     map_param.max_secondary
     // );
 
-    /*
     if nams.is_empty() {
-        sam.add_unmapped(record);
-        return;
+        return Vec::new();
     }
+    let mapped = Vec::new();
 
+    let alignments = Vec::new();
+    let tries = 0;
+    let n_max = nams[0];
+
+/*
     Read read(record.seq);
-    let alignments = std::vector<Alignment> alignments;
-    int tries = 0;
     float score_dropoff;
     Nam n_max = all_nams[0];
 
@@ -117,13 +119,12 @@ pub fn map_single_end_read(seq: &Vec<u8>, index: &StrobemerIndex) {
         is_primary = false;
     }
 
-
-
     */
 
 
     // statistics.tot_extend += extend_timer.duration();
     // statistics += details;
+    mapped
 }
 
 #[derive(Debug)]
