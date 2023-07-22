@@ -6,3 +6,4 @@ pub mod strobes;
 pub mod index;
 pub mod mapper;
 pub mod nam;
+pub mod cigar;
