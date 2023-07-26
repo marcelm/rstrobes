@@ -76,12 +76,14 @@ fn main() -> Result<(), Error> {
     index.populate(args.filter_fraction);
     let index = index;
 
+    let mapping_parameters = MappingParameters::new();
+
     // let mapper = Mapper::new(index);
     let f = File::open(&args.fastq_path)?;
     for record in FastqReader::new(f) {
         let record = record?;
         println!("Processing record {}", record.name);
-        map_single_end_read(&record.sequence, &record.name, &index);
+        map_single_end_read(record.sequence, record.name, &index, &mapping_parameters);
     }
 
     Ok(())
