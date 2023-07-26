@@ -9,24 +9,24 @@ use crate::read::Read;
 #[derive(Clone,Copy,Debug)]
 pub struct Nam {
     nam_id: usize,
-    query_start: usize,
-    query_end: usize,
+    pub ref_start: usize,
+    pub ref_end: usize,
+    pub query_start: usize,
+    pub query_end: usize,
     query_prev_hit_startpos: usize,
-    ref_start: usize,
-    ref_end: usize,
     ref_prev_hit_startpos: usize,
     pub n_hits: usize,
-    ref_id: usize,
+    pub ref_id: usize,
     pub score: u32,
-    is_revcomp: bool,
+    pub is_revcomp: bool,
 }
 
 impl Nam {
-    fn ref_span(&self) -> usize {
+    pub fn ref_span(&self) -> usize {
         self.ref_end - self.ref_start
     }
 
-    fn query_span(&self) -> usize {
+    pub fn query_span(&self) -> usize {
         self.query_end - self.query_start
     }
 }

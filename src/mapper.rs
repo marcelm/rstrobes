@@ -2,7 +2,7 @@ use std::cmp::{max, min, Reverse};
 use crate::cigar::Cigar;
 use crate::fasta::RefSequence;
 use crate::index::{IndexParameters, StrobemerIndex};
-use crate::nam::{find_nams, reverse_nam_if_needed};
+use crate::nam::{find_nams, Nam, reverse_nam_if_needed};
 use crate::revcomp::reverse_complement;
 use crate::strobes::RandstrobeIterator;
 use crate::syncmers::SyncmerIterator;
@@ -137,18 +137,18 @@ pub fn map_single_end_read(
         // details.tried_alignment += 1;
         // details.gapped += sam_aln.gapped;
 
-        if mapping_parameters.max_secondary > 0 {
-            alignments.push(alignment);
-        }
         if alignment.score > best_score {
             second_best_score = best_score;
             best_score = alignment.score;
-            best_alignment = alignment;
+            best_alignment = alignment.clone();
             if mapping_parameters.max_secondary == 0 {
                 best_edit_distance = best_alignment.global_edit_distance;
             }
         } else if alignment.score > second_best_score {
             second_best_score = alignment.score;
+        }
+        if mapping_parameters.max_secondary > 0 {
+            alignments.push(alignment);
         }
         tries += 1;
     }
@@ -181,6 +181,63 @@ pub fn map_single_end_read(
     // statistics.tot_extend += extend_timer.duration();
     // statistics += details;
     sam_records
+}
+
+/*
+ Extend a NAM so that it covers the entire read and return the resulting
+ alignment.
+*/
+fn get_alignment(
+    aligner: &Aligner,
+    nam: &Nam,
+    references: &Vec<RefSequence>,
+    read: &Read,
+    consistent_nam: bool,
+) -> Alignment {
+    let query = if nam.is_revcomp { read.rc() } else { read.seq() };
+    let refseq = &references[nam.ref_id].sequence;
+
+    let projected_ref_start = max(0, nam.ref_start - nam.query_start);
+    let projected_ref_end = min(nam.ref_end + query.len() - nam.query_end, refseq.len());
+
+    let info;
+    let result_ref_start;
+    let gapped = true;
+    if projected_ref_end - projected_ref_start == query.len() && consistent_nam {
+        let ref_segm_ham = &refseq[projected_ref_start..projected_ref_start+query.len()];
+        let hamming_dist = hamming_distance(query, ref_segm_ham);
+
+        if hamming_dist >= 0 && (((float) hamming_dist / query.size()) < 0.05) {
+            // Hamming distance worked fine, no need to ksw align
+            info = hamming_align(query, ref_segm_ham, aligner.parameters.match, aligner.parameters.mismatch, aligner.parameters.end_bonus);
+            result_ref_start = projected_ref_start + info.ref_start;
+            gapped = false;
+        }
+    }
+    if (gapped) {
+        const int diff = std::abs(nam.ref_span() - nam.query_span());
+        const int ext_left = std::min(50, projected_ref_start);
+        const int ref_start = projected_ref_start - ext_left;
+        const int ext_right = std::min(std::size_t(50), ref.size() - nam.ref_end);
+        const auto ref_segm_size = read.size() + diff + ext_left + ext_right;
+        const auto ref_segm = ref.substr(ref_start, ref_segm_size);
+        info = aligner.align(query, ref_segm);
+        result_ref_start = ref_start + info.ref_start;
+    }
+    int softclipped = info.query_start + (query.size() - info.query_end);
+    Alignment alignment;
+    alignment.cigar = std::move(info.cigar);
+    alignment.edit_distance = info.edit_distance;
+    alignment.global_ed = info.edit_distance + softclipped;
+    alignment.score = info.sw_score;
+    alignment.ref_start = result_ref_start;
+    alignment.length = info.ref_span();
+    alignment.is_rc = nam.is_rc;
+    alignment.is_unaligned = false;
+    alignment.ref_id = nam.ref_id;
+    alignment.gapped = gapped;
+
+    alignment
 }
 
 #[derive(Debug)]
