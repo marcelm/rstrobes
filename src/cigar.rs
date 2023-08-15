@@ -48,13 +48,13 @@ impl CigarOperation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 struct OpLen {
     op: CigarOperation,
     len: usize,
 }
 
-#[derive(Default,Debug)]
+#[derive(Default,Debug,Clone)]
 pub struct Cigar {
     ops: Vec<OpLen>,
 }

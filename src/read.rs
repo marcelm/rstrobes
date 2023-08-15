@@ -3,12 +3,12 @@ use crate::revcomp::reverse_complement;
 /// A sequence and its reverse complement
 #[derive(Debug)]
 pub struct Read<'a> {
-    seq: &'a Vec<u8>,
+    seq: &'a [u8],
     rc: Vec<u8>,
 }
 
 impl<'a> Read<'a> {
-    pub fn new(seq: &Vec<u8>) -> Self {
+    pub fn new(seq: &'a [u8]) -> Self {
         Read {
             seq,
             rc: reverse_complement(&seq),
@@ -19,11 +19,11 @@ impl<'a> Read<'a> {
         self.seq.len()
     }
 
-    pub fn seq(&self) -> &Vec<u8> {
+    pub fn seq(&self) -> &[u8] {
         &self.seq
     }
 
-    pub fn rc(&self) -> &Vec<u8> {
+    pub fn rc(&self) -> &[u8] {
         &self.rc
     }
 }

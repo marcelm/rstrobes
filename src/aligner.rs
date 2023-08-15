@@ -3,29 +3,45 @@
 use std::cell::Cell;
 use crate::cigar::{Cigar, CigarOperation};
 
-struct Scores {
+pub struct Scores {
     // match is a score, the others are penalties (all are nonnegative)
-    match_: u32,
-    mismatch: u32,
-    gap_open: u32,
-    gap_extend: u32,
-    end_bonus: u32,
+    pub match_: u32,
+    pub mismatch: u32,
+    pub gap_open: u32,
+    pub gap_extend: u32,
+    pub end_bonus: u32,
 }
 
-struct AlignmentInfo {
-    cigar: Cigar,
-    edit_distance: u32,
-    ref_start: usize,
-    ref_end: usize,
-    query_start: usize,
-    query_end: usize,
-    score: u32,
-
-    //int ref_span() const { return ref_end - ref_start; }
+impl Default for Scores {
+    fn default() -> Scores {
+        Scores {
+            match_: 2,
+            mismatch: 8,
+            gap_open: 12,
+            gap_extend: 1,
+            end_bonus: 10,
+        }
+    }
 }
 
-struct Aligner {
-    scores: Scores,
+pub struct AlignmentInfo {
+    pub cigar: Cigar,
+    pub edit_distance: u32,
+    pub ref_start: usize,
+    pub ref_end: usize,
+    pub query_start: usize,
+    pub query_end: usize,
+    pub score: u32,
+}
+
+impl AlignmentInfo {
+    pub fn ref_span(&self) -> usize {
+        self.ref_end - self.ref_start
+    }
+}
+
+pub struct Aligner {
+    pub scores: Scores, // TODO should not be pub?
     call_count: Cell<usize>,
     // ssw_aligner: StripedSmithWaterman::Aligner,
     // ssw_filter: StripedSmithWaterman::Filter,
@@ -37,12 +53,20 @@ impl Aligner {
         , ssw_aligner(StripedSmithWaterman::Aligner(parameters.match_, parameters.mismatch, parameters.gap_open, parameters.gap_extend))
     { }*/
 
+    pub fn new(scores: Scores) -> Self {
+        Aligner {
+            scores,
+            call_count: Cell::new(0usize),
+        }
+    }
+
     fn call_count(&self) -> usize {
         self.call_count.get()
     }
 
-    fn align(&self, query: &Vec<u8>, refseq: &Vec<u8>) -> Option<AlignmentInfo> {
+    pub fn align(&self, query: &[u8], refseq: &[u8]) -> Option<AlignmentInfo> {
         self.call_count.set(self.call_count.get() + 1);
+        /*
         // AlignmentInfo aln;
         // int32_t maskLen = query.len() / 2;
         maskLen = std::max(maskLen, 15);
@@ -132,10 +156,12 @@ impl Aligner {
         }
 
         Some(aln)
+        */
+        None
     }
 }
 
-pub fn hamming_distance(s: &Vec<u8>, t: &Vec<u8>) -> Option<u32> {
+pub fn hamming_distance(s: &[u8], t: &[u8]) -> Option<u32> {
     if s.len() != t.len() {
         return None;
     }
@@ -153,7 +179,7 @@ pub fn hamming_distance(s: &Vec<u8>, t: &Vec<u8>) -> Option<u32> {
 ///
 /// The end_bonus is added to the score if the segment extends until the end
 /// of the query, once for each end.
-fn highest_scoring_segment(query: &Vec<u8>, refseq: &Vec<u8>, match_: u32, mismatch: u32, end_bonus: u32) -> (usize, usize, u32) {
+fn highest_scoring_segment(query: &[u8], refseq: &[u8], match_: u32, mismatch: u32, end_bonus: u32) -> (usize, usize, u32) {
     let n = query.len();
 
     let mut start = 0; // start of the current segment
@@ -187,7 +213,7 @@ fn highest_scoring_segment(query: &Vec<u8>, refseq: &Vec<u8>, match_: u32, misma
     (best_start, best_end, best_score)
 }
 
-fn hamming_align(query: &Vec<u8>, refseq: &Vec<u8>, match_: u32, mismatch: u32, end_bonus: u32) -> Option<AlignmentInfo> {
+pub fn hamming_align(query: &[u8], refseq: &[u8], match_: u32, mismatch: u32, end_bonus: u32) -> Option<AlignmentInfo> {
     if query.len() != refseq.len() {
         return None;
     }

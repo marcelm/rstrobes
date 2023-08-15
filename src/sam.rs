@@ -1,34 +1,35 @@
 use std::fmt::{Display, Formatter};
 use crate::cigar::Cigar;
 
-const PAIRED: u16 = 1;
-const PROPER_PAIR: u16 = 2;
-const UNMAP: u16 = 4;
-const MUNMAP: u16 = 8;
-const REVERSE: u16 = 0x10;
-const MREVERSE: u16 = 0x20;
-const READ1: u16 = 0x40;
-const READ2: u16 = 0x80;
-const SECONDARY: u16 = 0x100;
-const QCFAIL: u16 = 0x200;
-const DUP: u16 = 0x400;
-const SUPPLEMENTARY: u16 = 0x800;
+pub const PAIRED: u16 = 1;
+pub const PROPER_PAIR: u16 = 2;
+pub const UNMAP: u16 = 4;
+pub const MUNMAP: u16 = 8;
+pub const REVERSE: u16 = 0x10;
+pub const MREVERSE: u16 = 0x20;
+pub const READ1: u16 = 0x40;
+pub const READ2: u16 = 0x80;
+pub const SECONDARY: u16 = 0x100;
+pub const QCFAIL: u16 = 0x200;
+pub const DUP: u16 = 0x400;
+pub const SUPPLEMENTARY: u16 = 0x800;
 
+// TODO String and Vec<u8> fields should be references
 pub struct SamRecord {
-    query_name: String,
-    flags: u16,
-    reference_name: Option<String>,
+    pub query_name: String,
+    pub flags: u16,
+    pub reference_name: Option<String>,
     /// 0-based position, converted to 1-based for output
-    pos: Option<u32>,
-    mapq: u8,
-    cigar: Option<Cigar>,
-    mate_reference_name: Option<String>,
-    mate_pos: Option<u32>,
-    template_len: Option<i32>,
-    query_sequence: Option<Vec<u8>>,
-    qual: Option<Vec<u8>>,
-    edit_distance: u32,
-    aln_score: u32,
+    pub pos: Option<u32>,
+    pub mapq: u8,
+    pub cigar: Option<Cigar>,
+    pub mate_reference_name: Option<String>,
+    pub mate_pos: Option<u32>,
+    pub template_len: Option<i32>,
+    pub query_sequence: Option<Vec<u8>>,
+    pub query_qualities: Option<Vec<u8>>,
+    pub edit_distance: u32,
+    pub alignment_score: u32,
     // details: Details,
 }
 
@@ -57,8 +58,8 @@ impl Display for SamRecord {
             Some(seq) if self.flags & SECONDARY != 0 => std::str::from_utf8(seq).unwrap(),
             _ => "*",
         };
-        let qual = match &self.qual {
-            Some(qual) if self.flags & SECONDARY != 0 => std::str::from_utf8(qual).unwrap(),
+        let query_qualities = match &self.query_qualities {
+            Some(query_qualities) if self.flags & SECONDARY != 0 => std::str::from_utf8(query_qualities).unwrap(),
             _ => "*",
         };
         let pos = match self.pos {
@@ -72,15 +73,17 @@ impl Display for SamRecord {
         write!(f, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.query_name,
             self.flags,
-            self.reference_name.unwrap_or("*".to_string()),
+            self.reference_name.as_ref().unwrap_or(&"*".to_string()),
             pos,
             self.mapq,
             cigar,
-            self.mate_reference_name.unwrap_or("*".to_string()),
+            self.mate_reference_name.as_ref().unwrap_or(&"*".to_string()),
             mate_pos,
             self.template_len.unwrap_or(0),
             query_sequence,
-            qual,
+            query_qualities,
         )
+        // TODO
+        // alignment_score, edit_distance
     }
 }
