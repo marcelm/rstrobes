@@ -18,7 +18,8 @@ use std::ffi::c_char;
  */
 
 #[repr(C)]
-struct SswAlignment {
+#[allow(non_camel_case_types)]
+pub struct s_align {
     score1: u16,
     score2: u16,
     ref_begin1: i32,
@@ -31,7 +32,8 @@ struct SswAlignment {
     flag: u16,
 }
 
-pub struct SswProfile {
+#[allow(non_camel_case_types)]
+pub struct s_profile {
     _data: [u8; 0],
     _marker:
         core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
@@ -39,12 +41,12 @@ pub struct SswProfile {
 
 #[link(name = "ssw")]
 extern {
-    fn ssw_init(read: *const i8, read_length: i32, mat: *const i8, n: i32, score_size: i8) -> *mut SswProfile;
+    pub fn ssw_init(read: *const i8, read_length: i32, mat: *const i8, n: i32, score_size: i8) -> *mut s_profile;
 
-    fn init_destroy(p: *mut SswProfile);
+    pub fn init_destroy(p: *mut s_profile);
 
-    fn ssw_align(
-        prof: *const SswProfile,
+    pub fn ssw_align(
+        prof: *const s_profile,
         refseq: *const i8,
         ref_length: i32,
         weight_gap_open: u8,
@@ -53,7 +55,7 @@ extern {
         filters: u16,
         filterd: i32,
         mask_length: i32
-    ) -> *const SswAlignment;
+    ) -> *const s_align;
 
-    fn align_destroy(a: *mut SswAlignment);
+    pub fn align_destroy(a: *mut s_align);
 }
