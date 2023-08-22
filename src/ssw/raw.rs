@@ -19,19 +19,21 @@ use std::ffi::c_char;
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
+#[derive(Debug)]
 pub struct s_align {
-    score1: u16,
-    score2: u16,
-    ref_begin1: i32,
-    ref_end1: i32,
-    read_begin1: i32,
-    read_end1: i32,
-    ref_end2: i32,
-    cigar: *const u32,
-    cigar_length: i32,
-    flag: u16,
+    pub score1: u16,
+    pub score2: u16,
+    pub ref_begin1: i32,
+    pub ref_end1: i32,
+    pub read_begin1: i32,
+    pub read_end1: i32,
+    pub ref_end2: i32,
+    pub cigar: *const u32,
+    pub cigar_length: i32,
+    pub flag: u16,
 }
 
+#[repr(C)] // TODO probably not needed as this is an opaque struct
 #[allow(non_camel_case_types)]
 pub struct s_profile {
     _data: [u8; 0],
@@ -55,7 +57,7 @@ extern {
         filters: u16,
         filterd: i32,
         mask_length: i32
-    ) -> *const s_align;
+    ) -> *mut s_align;
 
     pub fn align_destroy(a: *mut s_align);
 }

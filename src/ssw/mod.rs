@@ -1,8 +1,9 @@
 // partially based on ssw_cpp.h/.cpp by Wan-Ping Lee and Mengyao Zhao
 
-mod raw;
+use std::marker::PhantomData;
+use crate::cigar::Cigar;
 
-use raw::{ssw_init, s_profile};
+mod raw;
 
 const ENCODED_OPS: [u8; 128] = [
 	0,         0,         0,         0,
@@ -59,52 +60,6 @@ fn cigar_int_to_len(cigar_int: u32) -> u32 {
 	cigar_int >> BAM_CIGAR_SHIFT
 }*/
 
-struct SswAlignment<'a> {
-    sw_score: u16,           // The best alignment score
-    sw_score_next_best: u16, // The next best alignment score
-    ref_begin: i32,          // Reference begin position of the best alignment
-    ref_end: i32,            // Reference end position of the best alignment
-    query_begin: i32,        // Query begin position of the best alignment
-    query_end: i32,          // Query end position of the best alignment
-    ref_end_next_best: i32,  // Reference end position of the next best alignment
-    mismatches: i32,         // Number of mismatches of the alignment
-    cigar_string: &'a str,   // Cigar string of the best alignment
-    cigar: &'a [u32],        // Cigar stored in the BAM format
-                             //   high 28 bits: length
-                             //   low 4 bits: M/I/D/S/X (0/1/2/4/8);
-}
-
-struct Filter {
-  // NOTE: No matter the filter, those five fields of Alignment will be given anyway.
-  //       sw_score; sw_score_next_best; ref_end; query_end; ref_end_next_best.
-  // NOTE: Only need score of alignments, please set 'report_begin_position'
-  //       and 'report_cigar' false.
-
-  bool report_begin_position;    // Give ref_begin and query_begin.
-                                 //   If it is not set, ref_begin and query_begin are -1.
-  bool report_cigar;             // Give cigar_string and cigar.
-                                 //   report_begin_position is automatically TRUE.
-
-  // When *report_cigar* is true and alignment passes these two filters,
-  //   cigar_string and cigar will be given.
-  uint16_t score_filter;         // score >= score_filter
-  uint16_t distance_filter;      // ((ref_end - ref_begin) < distance_filter) &&
-                                 // ((query_end - read_begin) < distance_filter)
-
-  Filter()
-    : report_begin_position(true)
-    , report_cigar(true)
-    , score_filter(0)
-    , distance_filter(32767)
-  {};
-
-  Filter(const bool& pos, const bool& cigar, const uint16_t& score, const uint16_t& dis)
-    : report_begin_position(pos)
-    , report_cigar(cigar)
-    , score_filter(score)
-    , distance_filter(dis)
-    {};
-}
 
   // =========
   // @function Align the query againt the reference.
@@ -124,8 +79,7 @@ struct Filter {
   // uint16_t Align(const char* query, const char* ref, const int& ref_len,
   //            const Filter& filter, Alignment* alignment, const int32_t maskLen) const;
 
-
-fn doit() {
+/*fn doit() {
     ssw_aligner(StripedSmithWaterman::Aligner(parameters.match, parameters.mismatch, parameters.gap_open, parameters.gap_extend));
     flag = ssw_aligner.Align(query.c_str(), ref.c_str(), ref.size(), filter, &alignment_ssw, maskLen);
     if flag != 0 {
@@ -134,7 +88,7 @@ fn doit() {
         aln.sw_score = -100000;
         return aln;
     }
-}
+}*/
 
 fn translate(query: &[u8]) -> Vec<i8> {
     static TABLE: [i8; 128] = [
@@ -148,124 +102,173 @@ fn translate(query: &[u8]) -> Vec<i8> {
         4, 4, 4, 4,  3, 0, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4
     ];
 
-    query.iter().map(|c| TABLE[c as usize]).collect()
+    query.iter().map(|c| TABLE[*c as usize]).collect()
 }
 
+#[derive(Debug)]
 struct Profile<'a> {
-    profile: *mut s_profile,
+    profile: *mut raw::s_profile,
     query: &'a [i8],
     score_matrix: &'a [i8]
 }
 
-impl Profile {
-    /// query must be translated
-    fn new(query: &[i8], score_matrix: &[i8]) -> Self {
-        // TODO should return an error if query.is_empty()
-        let score_size = 2;
-        let profile = unsafe {
-            raw::ssw_init(query.as_ptr(), query.len() as i32, score_matrix.as_ptr(), score_matrix.len() as i32, score_size)
-        };
-        Profile { profile, query, score_matrix }
+#[derive(Debug)]
+pub struct SswAlignment {
+    pub sw_score: u16,           // The best alignment score
+    pub sw_score_next_best: u16, // The next best alignment score
+    pub ref_begin: i32,          // Reference begin position of the best alignment
+    pub ref_end: i32,            // Reference end position of the best alignment
+    pub query_begin: i32,        // Query begin position of the best alignment
+    pub query_end: i32,          // Query end position of the best alignment
+    pub ref_end_next_best: i32,  // Reference end position of the next best alignment
+    pub mismatches: i32,         // Number of mismatches of the alignment
+    //pub cigar_string: &'a str,   // Cigar string of the best alignment
+    pub cigar: Cigar,
+    //pub cigar: &'a [u32],        // Cigar stored in the BAM format
+                             //   high 28 bits: length
+                             //   low 4 bits: M/I/D/S/X (0/1/2/4/8);
+}
+
+struct Alignment<'a> {
+    raw: *mut raw::s_align,
+    _align: PhantomData<&'a raw::s_align>,
+}
+
+impl<'a> Alignment<'a> {
+    fn is_valid(&self) -> bool {
+        unsafe { (*self.raw).flag == 0 }
     }
 }
 
-impl Drop for Profile {
+impl<'a> Drop for Alignment<'a> {
     fn drop(&mut self) {
+        unsafe { raw::align_destroy(self.raw); }
+    }
+}
+
+impl<'a> From<Alignment<'a>> for SswAlignment {
+    fn from(alignment: Alignment) -> SswAlignment {
+        let raw = unsafe { alignment.raw.as_ref().expect("hm") };
+        let cigar_slice = unsafe { std::slice::from_raw_parts(raw.cigar, raw.cigar_length as usize) };
+        let cigar = Cigar::try_from(cigar_slice).expect("Invalid CIGAR");
+
+
+            /*al->cigar.clear();
+  al->cigar_string.clear();
+
+  if (s_al.cigarLen > 0) {
+    std::ostringstream cigar_string;
+    if (al->query_begin > 0) {
+      uint32_t cigar = to_cigar_int(al->query_begin, 'S');
+      al->cigar.push_back(cigar);
+      cigar_string << al->query_begin << 'S';
+    }
+
+    for (int i = 0; i < s_al.cigarLen; ++i) {
+      al->cigar.push_back(s_al.cigar[i]);
+      cigar_string << cigar_int_to_len(s_al.cigar[i]) << cigar_int_to_op(s_al.cigar[i]);
+    }
+
+    int end = query_len - al->query_end - 1;
+    if (end > 0) {
+      uint32_t cigar = to_cigar_int(end, 'S');
+      al->cigar.push_back(cigar);
+      cigar_string << end << 'S';
+    }
+
+  } // end if
+}
+*/
+/*  ConvertAlignment(*s_al, query_len, alignment);
+  alignment->mismatches = CalculateNumberMismatch(&*alignment, translated_ref, translated_query, query_len);
+*/
+
+        SswAlignment {
+            sw_score: raw.score1,
+            sw_score_next_best: raw.score2,
+            ref_begin: raw.ref_begin1,
+            ref_end: raw.ref_end1,
+            query_begin: raw.read_begin1,
+            query_end: raw.read_end1,
+            ref_end_next_best: raw.ref_end2,
+            cigar,
+            mismatches: 0,  // TODO
+        }
+    }
+}
+
+impl<'a> Profile<'a> {
+    /// query must be translated
+    fn new(translated_query: &'a [i8], score_matrix: &'a [i8]) -> Self {
+        // TODO should return an error if query.is_empty()
+        let score_size = 2;
+        let profile = unsafe {
+            raw::ssw_init(translated_query.as_ptr(), translated_query.len() as i32, score_matrix.as_ptr(), score_matrix.len() as i32, score_size)
+        };
+        dbg!("Profile::new");
+        Profile { profile, query: translated_query, score_matrix }
+    }
+
+    fn align(&self, translated_refseq: &[i8], gap_open_penalty: u8, gap_extend_penalty: u8, flag: u8, score_filter: u16, distance_filter: i32, mask_len: i32) -> Alignment {
+        dbg!("align");
+        let alignment = unsafe {
+            raw::ssw_align(self.profile, translated_refseq.as_ptr(), translated_refseq.len() as i32, gap_open_penalty, gap_extend_penalty, flag, score_filter, distance_filter, mask_len)
+        };
+        unsafe { dbg!(&*alignment); }
+        Alignment { raw: alignment, _align: PhantomData }
+    }
+}
+
+
+impl<'a> Drop for Profile<'a> {
+    fn drop(&mut self) {
+        dbg!("Calling drop for Profile");
         unsafe { raw::init_destroy(self.profile); }
     }
 }
 
-pub struct SswAligner {
-    score_matrix: *const i8,
+pub struct Aligner {
+    score_matrix: Vec<i8>,
     match_score: u8,
     mismatch_penalty: u8,
     gap_open_penalty: u8,
     gap_extend_penalty: u8,
-    ssw_profile: *Profile,
+//    ssw_profile: *Profile,
 }
 
-impl SswAligner {
+impl Aligner {
     pub fn new(match_score: u8, mismatch_penalty: u8, gap_open_penalty: u8, gap_extend_penalty: u8) -> Self {
-        /*
-    : score_matrix_(NULL)
-    , score_matrix_size_(5)
-    , translation_matrix_(NULL)
-    , translated_reference_(NULL)
-    , reference_length_(0)
-         */
         let mat = match_score as i8;
-        let mis = -mismatch_penalty as i8;
-        let score_matrix: [[i8; 5]; 5] = [
-            [mat, mis, mis, mis, mis],
-            [mis, mat, mis, mis, mis],
-            [mis, mis, mat, mis, mis],
-            [mis, mis, mis, mat, mis],
-            [mis, mis, mis, mis, mis],
+        let mis = -(mismatch_penalty as i8);
+        let score_matrix = vec![
+            mat, mis, mis, mis, mis,
+            mis, mat, mis, mis, mis,
+            mis, mis, mat, mis, mis,
+            mis, mis, mis, mat, mis,
+            mis, mis, mis, mis, mis,
         ];
-        SswAligner { score_matrix: score_matrix as *const i8, match_score, mismatch_penalty, gap_open_penalty, gap_extend_penalty, ssw_profile }
+        Aligner { score_matrix, match_score, mismatch_penalty, gap_open_penalty, gap_extend_penalty }
     }
 
-    pub fn align(query: &[u8], refseq: &[u8]) -> Option<SswAlignment> {
+    pub fn align(&self, query: &[u8], refseq: &[u8]) -> Option<SswAlignment> {
         if query.is_empty() {
             return None;
         }
 
         let query = translate(query);
         let refseq = translate(refseq);
-        // 1. translate query
-        // 2. translate ref
+        let profile = Profile::new(&query, &self.score_matrix);
+        dbg!(&profile);
+        let flag = 0x0f;
+        let score_filter = 0;
+        let distance_filter = i32::MAX;
+        let mask_len = std::cmp::max(query.len() / 2, 15);
 
-        //uint16_t Aligner::Align(const char* query, const char* ref, const int& ref_len,
-        //            const Filter& filter, Alignment* alignment, const int32_t maskLen) const
-/*        if !translation_matrix_ return false;
+        let alignment = profile.align(&refseq, self.gap_open_penalty, self.gap_extend_penalty, flag, score_filter, distance_filter, mask_len as i32);
+        if !alignment.is_valid() {
+            return None;
+        }
 
-  int8_t* translated_query = new int8_t[query_len];
-  TranslateBase(query, query_len, translated_query);
-
-  // calculate the valid length
-  int valid_ref_len = ref_len;
-  int8_t* translated_ref = new int8_t[valid_ref_len];
-  TranslateBase(ref, valid_ref_len, translated_ref);
-
-
-  const int8_t score_size = 2;
-  */
-  s_profile* profile = ssw_init(translated_query, query_len, score_matrix_, score_matrix_size_, score_size);
-
-  uint8_t flag = 0;
-  SetFlag(filter, &flag);
-  s_align* s_al = ssw_align(profile, translated_ref, valid_ref_len,
-                                 static_cast<int>(gap_opening_penalty_),
-				 static_cast<int>(gap_extending_penalty_),
-				 flag, filter.score_filter, filter.distance_filter, maskLen);
-
-  alignment->Clear();
-  ConvertAlignment(*s_al, query_len, alignment);
-  alignment->mismatches = CalculateNumberMismatch(&*alignment, translated_ref, translated_query, query_len);
-  uint16_t align_flag = s_al->flag;
-
-  // Free memory
-  delete [] translated_query;
-  delete [] translated_ref;
-  align_destroy(s_al);
-  init_destroy(profile);
-
-  return align_flag;
-}
-
-
+        Some(SswAlignment::from(alignment))
     }
-        translation_matrix_ = new int8_t[SizeOfArray(kBaseTranslation)];
-        memcpy(translation_matrix_, kBaseTranslation, sizeof(int8_t) * SizeOfArray(kBaseTranslation));
-
-        unsafe { ssw_init(query, query_length, mat, n, score_size); }
-    score_matrix: *const i8,
-    match_score: u8,
-    mismatch_penalty: u8,
-    gap_open_penalty: u8,
-    gap_extend_penalty: u8,
-    ssw_profile: *SswProfile,
-
-    }
-
 }

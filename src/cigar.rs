@@ -14,6 +14,17 @@ pub enum CigarOperation {
     X = 8,
 }
 
+impl TryFrom<u8> for CigarOperation {
+    type Error = ();
+    fn try_from(value: u8) -> Result<CigarOperation, ()> {
+        let value = value & 0xf;
+        if value > 8 {
+            return Err(());
+        }
+        unsafe { std::mem::transmute(value & 0xf) }
+    }
+}
+
 impl Display for CigarOperation {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let ch = match self {
@@ -52,6 +63,15 @@ impl CigarOperation {
 struct OpLen {
     op: CigarOperation,
     len: usize,
+}
+
+impl TryFrom<u32> for OpLen {
+    type Error = ();
+    fn try_from(value: u32) -> Result<Self, ()> {
+        let len = (value >> 4) as usize;
+        let op = CigarOperation::try_from((value & 0xf) as u8)?;
+        Ok(OpLen { len, op })
+    }
 }
 
 #[derive(Default,Debug,Clone)]
@@ -180,6 +200,15 @@ impl FromStr for Cigar {
         Ok(cigar)
     }
 }
+
+impl TryFrom<&[u32]> for Cigar {
+    type Error = ();
+    fn try_from(encoded: &[u32]) -> Result<Self, ()> {
+        let ops: Result<Vec<_>, _> = encoded.iter().map(|ol| OpLen::try_from(*ol)).collect();
+        Ok(Cigar { ops: ops? })
+    }
+}
+
 /*
 fn compress_cigar(ops: &String) -> String {
     char prev = 0;
