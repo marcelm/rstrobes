@@ -1,6 +1,7 @@
 //! Low-level alignment functions
 
 use std::cell::Cell;
+use std::error::Error;
 use crate::cigar::{Cigar, CigarOperation};
 
 pub struct Scores {
@@ -43,8 +44,7 @@ impl AlignmentInfo {
 pub struct Aligner {
     pub scores: Scores, // TODO should not be pub?
     call_count: Cell<usize>,
-    // ssw_aligner: StripedSmithWaterman::Aligner,
-    // ssw_filter: StripedSmithWaterman::Filter,
+    ssw_aligner: crate::ssw::Aligner,
 }
 
 impl Aligner {
@@ -53,11 +53,13 @@ impl Aligner {
         , ssw_aligner(StripedSmithWaterman::Aligner(parameters.match_, parameters.mismatch, parameters.gap_open, parameters.gap_extend))
     { }*/
 
-    pub fn new(scores: Scores) -> Self {
-        Aligner {
+    pub fn new(scores: Scores) -> Result<Self, ()> {
+        let ssw_aligner = crate::ssw::Aligner::new(scores.match_.try_into()?, scores.mismatch.try_into()?, scores.gap_open.try_into()?, scores.gap_extend.try_into()?);
+        Ok(Aligner {
             scores,
+            ssw_aligner,
             call_count: Cell::new(0usize),
-        }
+        })
     }
 
     fn call_count(&self) -> usize {
@@ -66,14 +68,15 @@ impl Aligner {
 
     pub fn align(&self, query: &[u8], refseq: &[u8]) -> Option<AlignmentInfo> {
         self.call_count.set(self.call_count.get() + 1);
-        /*
-        // AlignmentInfo aln;
-        // int32_t maskLen = query.len() / 2;
-        maskLen = std::max(maskLen, 15);
+
         if refseq.len() > 2000 {
-            //        std::cerr << "ALIGNMENT TO REF LONGER THAN 2000bp - REPORT TO DEVELOPER. Happened for read: " <<  query << " ref len:" << ref.length() << std::endl;
+            // TODO
             return None;
         }
+
+
+
+        /*
 
         let alignment_ssw: StripedSmithWaterman::Alignment;
 
