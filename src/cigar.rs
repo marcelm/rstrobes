@@ -59,7 +59,7 @@ impl CigarOperation {
     }
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,Copy)]
 struct OpLen {
     op: CigarOperation,
     len: usize,
@@ -113,6 +113,15 @@ impl Cigar {
         cigar
     }
 
+    pub fn reversed(&self) -> Self {
+        Cigar {
+            ops: self.ops.iter().copied().rev().collect()
+        }
+    }
+
+    pub fn extend(&mut self, other: &Cigar) {
+        self.ops.extend(&other.ops);
+    }
     /* This works only if I, D, X, = are the only operations used */
     /*pub fn edit_distance(&self) -> usize {
         let dist = 0;
