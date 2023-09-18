@@ -225,12 +225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pdqsort"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92d11770083078fa188bb64ff3b1b5af04c374bf429be2c77480823c1fc5c5e5"
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.66"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -278,7 +272,6 @@ dependencies = [
  "clap",
  "fxhash",
  "log",
- "pdqsort",
  "rayon",
  "sigpipe",
  "xxhash-rust",
