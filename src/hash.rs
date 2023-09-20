@@ -7,6 +7,7 @@ const PRIME_4: u64 = 0x85EBCA77C2B2AE63;
 const PRIME_5: u64 = 0x27D4EB2F165667C5;
 
 /// xxh64, but it can only be used for a single u64
+#[inline]
 pub fn xxh64(input: u64) -> u64 {
     let mut result= PRIME_5.wrapping_add(8);
     result ^= input.wrapping_mul(PRIME_2).rotate_left(31).wrapping_mul(PRIME_1);
