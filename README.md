@@ -1,3 +1,3 @@
 
 Most recent strobealign commit whose changes have been incorporated:
-8c742106f7ded266b632153c30ced89d01e204b4
+24d48614f3324362b219d5210f3e8a0d1b86b2e2
