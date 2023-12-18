@@ -355,3 +355,15 @@ fn extend_seed(
         gapped,
     })
 }
+
+pub fn map_paired_end_read(
+    r1: &SequenceRecord,
+    r2: &SequenceRecord,
+    index: &StrobemerIndex,
+    references: &[RefSequence],
+    mapping_parameters: &MappingParameters,
+    sam_output: &SamOutput,
+    aligner: &Aligner,
+) -> Vec<SamRecord> {
+    vec![]
+}
