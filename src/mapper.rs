@@ -12,6 +12,7 @@ use crate::read::Read;
 use crate::aligner::Aligner;
 use crate::details::Details;
 use crate::fastq::SequenceRecord;
+use crate::insertsize::InsertSizeDistribution;
 
 
 pub struct MappingParameters {
@@ -190,28 +191,10 @@ pub fn map_single_end_read(
     aligner: &Aligner,
 ) -> Vec<SamRecord> {
     let mut details = Details::default();
-    //Timer strobe_timer;
-    let query_randstrobes = randstrobes_query(&record.sequence, &index.parameters);
-    //statistics.tot_construct_strobemers += strobe_timer.duration();
 
-    // Timer nam_timer;
-    let (nonrepetitive_fraction, mut nams) = find_nams(&query_randstrobes, index, index.filter_cutoff);
-    // statistics.tot_find_nams += nam_timer.duration();
-
-    if mapping_parameters.rescue_level > 1 {
-
-        // Timer rescue_timer;
-        if nams.is_empty() || nonrepetitive_fraction < 0.7 {
-            details.nam_rescue = true;
-            nams = find_nams_rescue(&query_randstrobes, index, index.rescue_cutoff);
-        }
-        // statistics.tot_time_rescue += rescue_timer.duration();
-    }
+    let (was_rescued, mut nams) = get_nams(&record.sequence, &index, &mapping_parameters);
+    details.nam_rescue = was_rescued;
     details.nams = nams.len();
-    // Timer nam_sort_timer;
-
-    nams.sort_by_key(|&k| -(k.score as i32));
-    // statistics.tot_sort_nams += nam_sort_timer.duration();
 
     // Timer extend_timer;
     // align_SE(
@@ -294,6 +277,34 @@ pub fn map_single_end_read(
     sam_records
 }
 
+// TODO rename
+fn get_nams(sequence: &[u8], index: &StrobemerIndex, mapping_parameters: &MappingParameters) -> (bool, Vec<Nam>) {
+    //Timer strobe_timer;
+    let query_randstrobes = randstrobes_query(&sequence, &index.parameters);
+    //statistics.tot_construct_strobemers += strobe_timer.duration();
+
+    // Timer nam_timer;
+    let (nonrepetitive_fraction, mut nams) = find_nams(&query_randstrobes, index, index.filter_cutoff);
+    // statistics.tot_find_nams += nam_timer.duration();
+
+    let mut nam_rescue = false;
+    if mapping_parameters.rescue_level > 1 {
+        // Timer rescue_timer;
+        if nams.is_empty() || nonrepetitive_fraction < 0.7 {
+            nam_rescue = true;
+            nams = find_nams_rescue(&query_randstrobes, index, index.rescue_cutoff);
+        }
+        // statistics.tot_time_rescue += rescue_timer.duration();
+    }
+    // Timer nam_sort_timer;
+
+    nams.sort_by_key(|&k| -(k.score as i32));
+    // TODO shuffle_top_nams(nams, random_engine);
+    // statistics.tot_sort_nams += nam_sort_timer.duration();
+
+    (nam_rescue, nams)
+}
+
 /// Extend a NAM so that it covers the entire read and return the resulting
 /// alignment.
 fn extend_seed(
@@ -356,14 +367,121 @@ fn extend_seed(
     })
 }
 
+// AlignmentStatistics &statistics,
+// const IndexParameters& index_parameters,
+// std::minstd_rand& random_engine
+// TODO alignment statistics
 pub fn map_paired_end_read(
     r1: &SequenceRecord,
     r2: &SequenceRecord,
     index: &StrobemerIndex,
     references: &[RefSequence],
     mapping_parameters: &MappingParameters,
+    index_parameters: &IndexParameters,
+    insert_size_distribution: &mut InsertSizeDistribution,
     sam_output: &SamOutput,
     aligner: &Aligner,
 ) -> Vec<SamRecord> {
+    let mut details = [Details::default(), Details::default()];
+    let mut nams_pair = vec![vec![]];
+
+    for is_revcomp in [0, 1] {
+        let record = if is_revcomp == 0 { r1 } else { r2 };
+        let (was_rescued, mut nams) = get_nams(&record.sequence, &index, &mapping_parameters);
+        details[is_revcomp].nam_rescue = was_rescued;
+        details[is_revcomp].nams = nams.len();
+        nams_pair.push(nams);
+    }
+
+    // Timer extend_timer;
+    let read1 = Read::new(&r1.sequence);
+    let read2 = Read::new(&r2.sequence);
+    let alignment_pairs = align_paired(
+        aligner, &nams_pair[0], &nams_pair[1], &read1, &read2,
+        index_parameters.syncmer.k, references, details,
+        mapping_parameters.dropoff_threshold, insert_size_distribution,
+        mapping_parameters.max_tries
+    );
+
+    // -1 marks the typical case that both reads map uniquely and form a
+    // proper pair. Then the mapping quality is computed based on the NAMs.
+    if (alignment_pairs.size() == 1 && alignment_pairs[0].score == -1) {
+        let alignment1 = &alignment_pairs[0].alignment1;
+        let alignment2 = &alignment_pairs[0].alignment2;
+        let is_proper = is_proper_pair(alignment1, alignment2, insert_size_distribution.mu, insert_size_distribution.sigma);
+        if is_proper
+            && insert_size_distribution.sample_size < 400
+            && alignment1.edit_distance + alignment2.edit_distance < 3
+        {
+            insert_size_distribution.update((alignment1.ref_start - alignment2.ref_start).unsigned_abs());
+        }
+
+        uint8_t mapq1 = proper_pair_mapq(nams_pair[0]);
+        uint8_t mapq2 = proper_pair_mapq(nams_pair[1]);
+
+        details[0].best_alignments = 1;
+        details[1].best_alignments = 1;
+        let is_primary = true;
+        sam.add_pair(alignment1, alignment2, record1, record2, read1.rc, read2.rc, mapq1, mapq2, is_proper, is_primary, details);
+    } else {
+        std::sort(alignment_pairs.begin(), alignment_pairs.end(), by_score<ScoredAlignmentPair>);
+        deduplicate_scored_pairs(alignment_pairs);
+
+        // If there are multiple top-scoring alignments (all with the same score),
+        // pick one randomly and move it to the front.
+        size_t i = count_best_alignment_pairs(alignment_pairs);
+        details[0].best_alignments = i;
+        details[1].best_alignments = i;
+        if (i > 1) {
+            size_t random_index = std::uniform_int_distribution<>(0, i - 1)(random_engine);
+            if (random_index != 0) {
+                std::swap(alignment_pairs[0], alignment_pairs[random_index]);
+            }
+        }
+
+        double secondary_dropoff = 2 * aligner.parameters.mismatch + aligner.parameters.gap_open;
+        output_aligned_pairs(
+            alignment_pairs,
+            sam,
+            map_param.max_secondary,
+            secondary_dropoff,
+            record1,
+            record2,
+            read1,
+            read2,
+            insert_size_distribution.mu,
+            insert_size_distribution.sigma,
+            details
+        );
+    }
+    statistics.tot_extend += extend_timer.duration();
+    statistics += details[0];
+    statistics += details[1];
+
     vec![]
+}
+
+fn is_proper_pair(alignment1: &Alignment, alignment2: &Alignment, mu: f32, sigma: f32) -> bool {
+    let dist = alignment2.ref_start as isize - alignment1.ref_start as isize;
+    let same_reference = alignment1.reference_id == alignment2.reference_id;
+    let both_aligned = same_reference && !alignment1.is_unaligned && !alignment2.is_unaligned;
+    let r1_r2 = !alignment1.is_revcomp && alignment2.is_revcomp && dist >= 0; // r1 ---> <---- r2
+    let r2_r1 = !alignment2.is_revcomp && alignment1.is_revcomp && dist <= 0; // r2 ---> <---- r1
+    let rel_orientation_good = r1_r2 || r2_r1;
+    let insert_good = dist.unsigned_abs() <= (mu + sigma * 6.0) as usize;
+
+    both_aligned && insert_good && rel_orientation_good
+}
+
+fn proper_pair_mapq(nams: &[Nam]) -> u8 {
+    if nams.len() <= 1 {
+        return 60;
+    }
+    let s1 = nams[0].score;
+    let s2 = nams[1].score;
+    // from minimap2: MAPQ = 40(1−s2/s1) ·min{1,|M|/10} · log s1
+    let min_matches = min(nams[0].n_hits, 10) as f32 / 10.0;
+    let uncapped_mapq = 40.0 * (1 - s2 / s1) as f32 * min_matches * (s1 as f32).ln();
+
+    uncapped_mapq.min(60.0) as u8
 }
