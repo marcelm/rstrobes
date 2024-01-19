@@ -30,6 +30,10 @@ impl Nam {
     pub fn query_span(&self) -> usize {
         self.query_end - self.query_start
     }
+
+    pub fn projected_ref_start(&self) -> usize {
+        self.ref_start.saturating_sub(self.query_start)
+    }
 }
 
 struct Hit {

@@ -17,6 +17,10 @@ pub struct Details {
 
     /// No. of gapped alignments computed (in get_alignment)
     pub gapped: usize,
+
+    /// No. of best alignments with same score
+    pub best_alignments: usize,
+
 }
 
 impl Details {

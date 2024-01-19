@@ -19,7 +19,7 @@ impl InsertSizeDistribution {
     }
 
     /// Add a new observation
-    pub fn update(&mut self, insert_size: u32) {
+    pub fn update(&mut self, insert_size: usize) {
         if insert_size >= 2000 {
             return;
         }

@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::Instant;
 use log::{debug, info};
 use clap::Parser;
+use fastrand::Rng;
 use rstrobes::aligner::{Aligner, Scores};
 use rstrobes::fastq::FastqReader;
 use rstrobes::fasta;
@@ -189,6 +190,7 @@ fn main() -> Result<(), Error> {
     let out = std::io::stdout().lock();
     let mut out = BufWriter::new(out);
 
+    let mut rng = Rng::with_seed(0);
     if let Some(r2_path) = args.fastq_path2 {
         // paired-end reads
         let f1 = File::open(&args.fastq_path)?;
@@ -197,7 +199,9 @@ fn main() -> Result<(), Error> {
         for (r1, r2) in FastqReader::new(f1).into_iter().zip(FastqReader::new(f2)) {
             let r1 = r1?;
             let r2 = r2?;
-            let sam_records = map_paired_end_read(&r1, &r2, &index, &references, &mapping_parameters, &sam_output, &aligner);
+            let sam_records = map_paired_end_read(
+                &r1, &r2, &index, &references, &mapping_parameters, &sam_output, &aligner, &rng
+            );
             for sam_record in sam_records {
                 if sam_record.is_mapped() || !args.only_mapped {
                     writeln!(out, "{}", sam_record)?;
@@ -210,7 +214,7 @@ fn main() -> Result<(), Error> {
 
         for record in FastqReader::new(f1) {
             let record = record?;
-            let sam_records = map_single_end_read(&record, &index, &references, &mapping_parameters, &sam_output, &aligner);
+            let sam_records = map_single_end_read(&record, &index, &references, &mapping_parameters, &sam_output, &aligner, &rng);
             for sam_record in sam_records {
                 if sam_record.is_mapped() || !args.only_mapped {
                     writeln!(out, "{}", sam_record)?;
