@@ -9,7 +9,7 @@ use crate::read::Read;
 /// Non-overlapping approximate match
 #[derive(Clone,Copy,Debug)]
 pub struct Nam {
-    nam_id: usize,
+    pub nam_id: usize,
     pub ref_start: usize,
     pub ref_end: usize,
     pub query_start: usize,

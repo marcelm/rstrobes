@@ -1,4 +1,5 @@
 use std::cmp::{min, Reverse};
+use std::collections::HashMap;
 use std::mem;
 use fastrand::Rng;
 use crate::aligner::{AlignmentInfo, hamming_align, hamming_distance};
@@ -9,7 +10,7 @@ use crate::nam::{find_nams, find_nams_rescue, Nam, reverse_nam_if_needed};
 use crate::revcomp::reverse_complement;
 use crate::strobes::RandstrobeIterator;
 use crate::syncmers::SyncmerIterator;
-use crate::sam::{SamRecord, REVERSE, SECONDARY, UNMAP};
+use crate::sam::{SamRecord, REVERSE, SECONDARY, UNMAP, PAIRED, READ1, READ2, PROPER_PAIR, MUNMAP, MREVERSE};
 use crate::read::Read;
 use crate::aligner::Aligner;
 use crate::details::Details;
@@ -181,6 +182,107 @@ impl SamOutput {
             rg_id: self.rg_id.clone(),
             ..SamRecord::default()
         }
+    }
+
+    // alignment: &Alignment, references: &[RefSequence], record: &SequenceRecord, mut mapq: u8, is_primary: bool, details: Details) -> SamRecord {
+    fn make_paired_records(
+        &self,
+        alignments: [&Alignment; 2],
+        references: &[RefSequence],
+        records: [&SequenceRecord; 2],
+        mapq: [u8; 2],
+        details: &[Details; 2],
+        is_primary: bool,
+        is_proper: bool,
+    ) -> [SamRecord; 2] {
+        let mut sam_records = [
+            self.make_record(&alignments[0], references, &records[0], mapq[0], is_primary, details[0].clone()), // TODO clone
+            self.make_record(&alignments[1], references, &records[1], mapq[1], is_primary, details[1].clone()),
+        ];
+        sam_records[0].flags |= PAIRED | READ1;
+        sam_records[1].flags |= PAIRED | READ2;
+
+        let mut template_len1 = 0;
+        let both_aligned = !alignments[0].is_unaligned && !alignments[1].is_unaligned;
+        if both_aligned && alignments[0].reference_id == alignments[1].reference_id {
+            let dist = alignments[1].ref_start - alignments[0].ref_start;
+            if alignments[1].ref_start > alignments[0].ref_start {
+                template_len1 = (alignments[1].ref_start - alignments[0].ref_start + alignments[1].length) as isize;
+            }
+            else {
+                template_len1 = -((alignments[0].ref_start - alignments[1].ref_start) as isize) - alignments[0].length as isize;
+            }
+        }
+        if is_proper {
+            sam_records[0].flags |= PROPER_PAIR;
+            sam_records[1].flags |= PROPER_PAIR;
+        }
+
+        let reference_name1;
+        let mut pos1 = alignments[0].ref_start;
+        let edit_distance1 = alignments[0].edit_distance;
+        if alignments[0].is_unaligned {
+            sam_records[0].flags |= UNMAP;
+            sam_records[1].flags |= MUNMAP;
+            pos1 = -1;
+            reference_name1 = "*";
+        } else {
+            if alignments[0].is_revcomp {
+                sam_records[0].flags |= REVERSE;
+                sam_records[1].flags |= MREVERSE;
+            }
+            reference_name1 = &references[alignments[0].reference_id].name;
+        }
+
+        let reference_name2;
+        let mut pos2 = alignments[1].ref_start;
+        let edit_distance2 = alignments[1].edit_distance;
+        if alignments[1].is_unaligned {
+            sam_records[1].flags |= UNMAP;
+            sam_records[0].flags |= MUNMAP;
+            pos2 = -1;
+            reference_name2 = "*";
+        } else {
+            if alignments[1].is_revcomp {
+                sam_records[0].flags |= MREVERSE;
+                sam_records[1].flags |= REVERSE;
+            }
+            reference_name2 = &references[alignments[1].reference_id].name;
+        }
+
+        // Reference name as used in the RNEXT field;
+        // set to "=" if identical to reference_name
+        let mut mate_reference_name1 = reference_name1;
+        let mut mate_reference_name2 = reference_name2;
+        if
+            (!alignments[0].is_unaligned && !alignments[1].is_unaligned && alignments[0].reference_id == alignments[1].reference_id)
+            || (alignments[0].is_unaligned != alignments[1].is_unaligned)
+        {
+            mate_reference_name1 = "=";
+            mate_reference_name2 = "=";
+        }
+
+        if alignments[0].is_unaligned != alignments[1].is_unaligned {
+            if alignments[0].is_unaligned {
+                pos1 = pos2;
+            } else {
+                pos2 = pos1;
+            }
+        }
+
+        /* TODO
+        if alignments[0].is_unaligned {
+            add_unmapped_mate(record1, f1, reference_name2, pos2);
+        } else {
+            add_record(record1.name, record1.comment, f1, reference_name1, alignment1.ref_start, mapq1, alignment1.cigar, mate_reference_name2, pos2, template_len1, record1.seq, read1_rc, record1.qual, edit_distance1, alignment1.score, details[0]);
+        }
+        if alignments[1].is_unaligned {
+            add_unmapped_mate(record2, f2, reference_name1, pos1);
+        } else {
+            add_record(record2.name, record2.comment, f2, reference_name2, alignment2.ref_start, mapq2, alignment2.cigar, mate_reference_name1, pos1, -template_len1, record2.seq, read2_rc, record2.qual, edit_distance2, alignment2.score, details[1]);
+        }
+        */
+        sam_records
     }
 }
 
@@ -376,6 +478,7 @@ pub fn map_paired_end_read(
     index: &StrobemerIndex,
     references: &[RefSequence],
     mapping_parameters: &MappingParameters,
+    sam_output: &SamOutput,
     index_parameters: &IndexParameters,
     insert_size_distribution: &mut InsertSizeDistribution,
     aligner: &Aligner,
@@ -396,7 +499,7 @@ pub fn map_paired_end_read(
     let read1 = Read::new(&r1.sequence);
     let read2 = Read::new(&r2.sequence);
     let mut alignment_pairs = align_paired(
-        aligner, &nams_pair[0], &nams_pair[1], &read1, &read2,
+        aligner, &mut nams_pair[0], &mut nams_pair[1], &read1, &read2,
         index_parameters.syncmer.k, references, &mut details,
         mapping_parameters.dropoff_threshold, insert_size_distribution,
         mapping_parameters.max_tries
@@ -423,7 +526,10 @@ pub fn map_paired_end_read(
         details[0].best_alignments = 1;
         details[1].best_alignments = 1;
         let is_primary = true;
-        sam_records.extend(alignment_pairs[0].as_sam_records(&r1, &r2, read1.rc(), read2.rc(), mapq1, mapq2, is_proper, is_primary, details));
+
+        sam_records.extend(
+            sam_output.make_paired_records([alignment1, alignment2], references, [r1, r2], [mapq1, mapq2], &details, is_primary, is_proper)
+        );
     } else {
         alignment_pairs.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
         deduplicate_scored_pairs(&mut alignment_pairs);
@@ -441,9 +547,8 @@ pub fn map_paired_end_read(
         }
 
         let secondary_dropoff = 2 * aligner.scores.mismatch + aligner.scores.gap_open;
-        output_aligned_pairs(
+        sam_records.extend(aligned_pairs_to_sam(
             alignment_pairs,
-            sam,
             map_param.max_secondary,
             secondary_dropoff,
             &r1,
@@ -453,7 +558,7 @@ pub fn map_paired_end_read(
             insert_size_distribution.mu,
             insert_size_distribution.sigma,
             details
-        );
+        ));
     }
     // TODO
     // statistics.tot_extend += extend_timer.duration();
@@ -465,8 +570,8 @@ pub fn map_paired_end_read(
 
 fn align_paired(
     aligner: &Aligner,
-    nams1: &[Nam],
-    nams2: &[Nam],
+    nams1: &mut [Nam],
+    nams2: &mut [Nam],
     read1: &Read,
     read2: &Read,
     k: usize,
@@ -560,106 +665,113 @@ fn align_paired(
     let nam_pairs = get_best_scoring_nam_pairs(&nams1, &nams2, mu, sigma);
 
     // Cache for already computed alignments. Maps NAM ids to alignments.
-    robin_hood::unordered_map<int,Alignment> is_aligned1;
-    robin_hood::unordered_map<int,Alignment> is_aligned2;
+    let mut is_aligned1 = HashMap::new();
+    let mut is_aligned2 = HashMap::new();
 
     // These keep track of the alignments that would be best if we treated
     // the paired-end read as two single-end reads.
-    Alignment a1_indv_max, a2_indv_max;
+    let a1_indv_max;
+    let a2_indv_max;
     {
-        auto n1_max = nams1[0];
-        bool consistent_nam1 = reverse_nam_if_needed(n1_max, read1, references, k);
-        details[0].nam_inconsistent += !consistent_nam1;
-        a1_indv_max = extend_seed(aligner, n1_max, references, read1, consistent_nam1);
-        is_aligned1[n1_max.nam_id] = a1_indv_max;
-        details[0].tried_alignment++;
-        details[0].gapped += a1_indv_max.gapped;
+        let mut n1_max = nams1[0];
+        let consistent_nam1 = reverse_nam_if_needed(&mut n1_max, read1, references, k);
+        details[0].nam_inconsistent += !(consistent_nam1 as usize);
+        // TODO unwrap
+        a1_indv_max = extend_seed(aligner, &n1_max, references, read1, consistent_nam1).unwrap();
+        details[0].tried_alignment += 1;
+        details[0].gapped += a1_indv_max.gapped as usize;
+        is_aligned1.insert(n1_max.nam_id, a1_indv_max);
 
-        auto n2_max = nams2[0];
-        bool consistent_nam2 = reverse_nam_if_needed(n2_max, read2, references, k);
-        details[1].nam_inconsistent += !consistent_nam2;
-        a2_indv_max = extend_seed(aligner, n2_max, references, read2, consistent_nam2);
-        is_aligned2[n2_max.nam_id] = a2_indv_max;
-        details[1].tried_alignment++;
-        details[1].gapped += a2_indv_max.gapped;
+        let mut n2_max = nams2[0];
+        let consistent_nam2 = reverse_nam_if_needed(&mut n2_max, read2, references, k);
+        details[1].nam_inconsistent += !(consistent_nam2 as usize);
+        a2_indv_max = extend_seed(aligner, &mut n2_max, references, read2, consistent_nam2).unwrap();
+        details[1].tried_alignment += 1;
+        details[1].gapped += a2_indv_max.gapped as usize;
+        is_aligned2.insert(n2_max.nam_id, a2_indv_max);
     }
 
     // Turn pairs of high-scoring NAMs into pairs of alignments
-    std::vector<ScoredAlignmentPair> high_scores;
-    auto max_score = nam_pairs[0].n_hits;
-    for (auto &[score_, n1, n2] : nam_pairs) {
-        float score_dropoff = (float) score_ / max_score;
+    let mut high_scores = vec![];
+    let max_score = nam_pairs[0].n_hits;
+    for nam_pair in nam_pairs {
+        let score_ = nam_pair.n_hits;
+        let mut n1 = nam_pair.nam1;
+        let mut n2 = nam_pair.nam2;
+        let score_dropoff = score_ as f32 / max_score as f32;
 
-        if (high_scores.size() >= max_tries || score_dropoff < dropoff) {
+        if high_scores.len() >= max_tries || score_dropoff < dropoff {
             break;
         }
 
         // Get alignments for the two NAMs, either by computing the alignment,
         // retrieving it from the cache or by attempting a rescue (if the NAM
         // actually is a dummy, that is, only the partner is available)
-        Alignment a1;
+        let mut a1;
+        // TODO get rid of dummy NAMs
         // ref_start == -1 is a marker for a dummy NAM
-        if (n1.ref_start >= 0) {
-            if (is_aligned1.find(n1.nam_id) != is_aligned1.end() ){
-                a1 = is_aligned1[n1.nam_id];
+        if n1.ref_start >= 0 {
+            // TODO combine .contains_key + .get, avoid unwrap
+            if is_aligned1.contains_key(&n1.nam_id) {
+                a1 = is_aligned1.get(&n1.nam_id).unwrap();
             } else {
-                bool consistent_nam = reverse_nam_if_needed(n1, read1, references, k);
-                details[0].nam_inconsistent += !consistent_nam;
-                a1 = extend_seed(aligner, n1, references, read1, consistent_nam);
-                is_aligned1[n1.nam_id] = a1;
-                details[0].tried_alignment++;
-                details[0].gapped += a1.gapped;
+                let consistent_nam = reverse_nam_if_needed(&mut n1, read1, references, k);
+                details[0].nam_inconsistent += !(consistent_nam as usize);
+                a1 = extend_seed(aligner, &n1, references, read1, consistent_nam);
+                is_aligned1.insert(n1.nam_id, a1);
+                details[0].tried_alignment += 1;
+                details[0].gapped += a1.gapped as usize;
             }
         } else {
-            details[1].nam_inconsistent += !reverse_nam_if_needed(n2, read2, references, k);
+            details[1].nam_inconsistent += !(reverse_nam_if_needed(&mut n2, read2, references, k) as usize);
             a1 = rescue_align(aligner, n2, references, read1, mu, sigma, k);
-            details[0].mate_rescue += !a1.is_unaligned;
-            details[0].tried_alignment++;
+            details[0].mate_rescue += !(a1.is_unaligned as usize);
+            details[0].tried_alignment += 1;
         }
-        if (a1.score > a1_indv_max.score) {
+        if a1.score > a1_indv_max.score {
             a1_indv_max = a1;
         }
 
-        Alignment a2;
+        let a2;
         // ref_start == -1 is a marker for a dummy NAM
-        if (n2.ref_start >= 0) {
-            if (is_aligned2.find(n2.nam_id) != is_aligned2.end() ){
+        if n2.ref_start >= 0 {
+            if is_aligned2.find(n2.nam_id) != is_aligned2.end() {
                 a2 = is_aligned2[n2.nam_id];
             } else {
-                bool consistent_nam = reverse_nam_if_needed(n2, read2, references, k);
-                details[1].nam_inconsistent += !consistent_nam;
+                let consistent_nam = reverse_nam_if_needed(&mut n2, read2, references, k);
+                details[1].nam_inconsistent += !(consistent_nam as usize);
                 a2 = extend_seed(aligner, n2, references, read2, consistent_nam);
                 is_aligned2[n2.nam_id] = a2;
                 details[1].tried_alignment++;
                 details[1].gapped += a2.gapped;
             }
         } else {
-            details[0].nam_inconsistent += !reverse_nam_if_needed(n1, read1, references, k);
+            details[0].nam_inconsistent += !(reverse_nam_if_needed(&mut n1, read1, references, k) as usize);
             a2 = rescue_align(aligner, n1, references, read2, mu, sigma, k);
-            details[1].mate_rescue += !a2.is_unaligned;
-            details[1].tried_alignment++;
+            details[1].mate_rescue += !(a2.is_unaligned as usize);
+            details[1].tried_alignment += 1;
         }
         if (a2.score > a2_indv_max.score){
             a2_indv_max = a2;
         }
 
-        bool r1_r2 = a2.is_rc && (a1.ref_start <= a2.ref_start) && ((a2.ref_start - a1.ref_start) < mu + 10*sigma); // r1 ---> <---- r2
-        bool r2_r1 = a1.is_rc && (a2.ref_start <= a1.ref_start) && ((a1.ref_start - a2.ref_start) < mu + 10*sigma); // r2 ---> <---- r1
+        let r1_r2 = a2.is_revcomp && (a1.ref_start <= a2.ref_start) && ((a2.ref_start - a1.ref_start) < mu + 10*sigma); // r1 ---> <---- r2
+        let r2_r1 = a1.is_revcomp && (a2.ref_start <= a1.ref_start) && ((a1.ref_start - a2.ref_start) < mu + 10*sigma); // r2 ---> <---- r1
 
-        double combined_score;
-        if (r1_r2 || r2_r1) {
+        let combined_score;
+        if r1_r2 || r2_r1 {
             // Treat a1/a2 as a pair
-            float x = std::abs(a1.ref_start - a2.ref_start);
-            combined_score = (double)a1.score + (double)a2.score + std::max(-20.0f + 0.001f, log(normal_pdf(x, mu, sigma)));
+            let x = a1.ref_start.abs_diff(a2.ref_start);
+            combined_score = a1.score as f64 + a2.score as f64 + (-20.0f64 + 0.001).max(normal_pdf(x as f32, mu, sigma).ln() as f64);
             //* (1 - s2 / s1) * min_matches * log(s1);
         } else {
             // Treat a1/a2 as two single-end reads
             // 20 corresponds to a value of log(normal_pdf(x, mu, sigma)) of more than 5 stddevs away (for most reasonable values of stddev)
-            combined_score = (double)a1.score + (double)a2.score - 20;
+            combined_score = a1.score as f64 + a2.score as f64 - 20.0;
         }
 
-        ScoredAlignmentPair aln_pair{combined_score, a1, a2};
-        high_scores.push_back(aln_pair);
+        let aln_pair = ScoredAlignmentPair { score: combined_score, alignment1: a1, alignment2: a2 };
+        high_scores.push(aln_pair);
     }
 
     // Finally, add highest scores of both mates as individually mapped
@@ -668,6 +780,28 @@ fn align_paired(
     high_scores.push_back(aln_tuple);
 
     return high_scores;
+}
+
+fn get_best_scoring_pairs(
+    alignments1: &[Alignment], alignments2: &[Alignment], mu: f32, sigma: f32
+) -> Vec<ScoredAlignmentPair> {
+    let mut pairs = vec![];
+    for a1 in alignments1 {
+        for a2 in alignments2 {
+            let dist = a1.ref_start.abs_diff(a2.ref_start);
+            let mut score = (a1.score + a2.score) as f32;
+            if (a1.is_revcomp ^ a2.is_revcomp) && (dist as f32) < mu + 4.0 * sigma {
+                score += normal_pdf(dist as f32, mu, sigma).ln();
+            }
+            else { // individual score
+                // 10 corresponds to a value of log(normal_pdf(dist, mu, sigma)) of more than 4 stddevs away
+                score -= 10.0;
+            }
+            pairs.push(ScoredAlignmentPair {score: score as f64, alignment1: a1.clone(), alignment2: a2.clone()});
+        }
+    }
+
+    pairs
 }
 
 fn is_proper_pair(alignment1: &Alignment, alignment2: &Alignment, mu: f32, sigma: f32) -> bool {
@@ -698,6 +832,80 @@ fn is_proper_nam_pair(nam1: &Nam, nam2: &Nam, mu: f32, sigma: f32) -> bool {
     return r1_r2 || r2_r1;
 }
 
+/// Find high-scoring NAMs and NAM pairs. Proper pairs are preferred, but also
+/// high-scoring NAMs that could not be paired up are returned (these get a
+/// "dummy" NAM as partner in the returned vector).
+fn get_best_scoring_nam_pairs(
+    nams1: &[Nam],
+    nams2: &[Nam],
+    mu: f32,
+    sigma: f32,
+) -> Vec<NamPair> {
+    let nam_pairs = vec![];
+    if nams1.is_empty() && nams2.is_empty() {
+        return nam_pairs;
+    }
+
+    // Find NAM pairs that appear to be proper pairs
+    robin_hood::unordered_set<int> added_n1;
+    robin_hood::unordered_set<int> added_n2;
+    int best_joint_hits = 0;
+    for (auto &nam1 : nams1) {
+        for (auto &nam2 : nams2) {
+            int joint_hits = nam1.n_hits + nam2.n_hits;
+            if (joint_hits < best_joint_hits / 2) {
+                break;
+            }
+            if (is_proper_nam_pair(nam1, nam2, mu, sigma)) {
+                nam_pairs.push_back(NamPair{joint_hits, nam1, nam2});
+                added_n1.insert(nam1.nam_id);
+                added_n2.insert(nam2.nam_id);
+                best_joint_hits = std::max(joint_hits, best_joint_hits);
+            }
+        }
+    }
+
+    // Find high-scoring R1 NAMs that are not part of a proper pair
+    Nam dummy_nam;
+    dummy_nam.ref_start = -1;
+    if (!nams1.empty()) {
+        int best_joint_hits1 = best_joint_hits > 0 ? best_joint_hits : nams1[0].n_hits;
+        for (auto &nam1 : nams1) {
+            if (nam1.n_hits < best_joint_hits1 / 2) {
+                break;
+            }
+            if (added_n1.find(nam1.nam_id) != added_n1.end()) {
+                continue;
+            }
+//            int n1_penalty = std::abs(nam1.query_span() - nam1.ref_span());
+            nam_pairs.push_back(NamPair{nam1.n_hits, nam1, dummy_nam});
+        }
+    }
+
+    // Find high-scoring R2 NAMs that are not part of a proper pair
+    if (!nams2.empty()) {
+        int best_joint_hits2 = best_joint_hits > 0 ? best_joint_hits : nams2[0].n_hits;
+        for (auto &nam2 : nams2) {
+            if (nam2.n_hits < best_joint_hits2 / 2) {
+                break;
+            }
+            if (added_n2.find(nam2.nam_id) != added_n2.end()){
+                continue;
+            }
+//            int n2_penalty = std::abs(nam2.query_span() - nam2.ref_span());
+            nam_pairs.push_back(NamPair{nam2.n_hits, dummy_nam, nam2});
+        }
+    }
+
+    std::sort(
+        nam_pairs.begin(),
+        nam_pairs.end(),
+        [](const NamPair& a, const NamPair& b) -> bool { return a.n_hits > b.n_hits; }
+    ); // Sort by highest score first
+
+    return nam_pairs;
+}
+
 fn proper_pair_mapq(nams: &[Nam]) -> u8 {
     if nams.len() <= 1 {
         return 60;
@@ -711,10 +919,49 @@ fn proper_pair_mapq(nams: &[Nam]) -> u8 {
     uncapped_mapq.min(60.0) as u8
 }
 
+struct NamPair {
+    n_hits: usize,
+    nam1: Nam,
+    nam2: Nam,
+}
+
+#[derive(Clone)]
 pub struct ScoredAlignmentPair {
     score: f64,
     alignment1: Alignment,
     alignment2: Alignment,
+}
+
+/// Remove consecutive identical alignment pairs and leave only the first.
+fn deduplicate_scored_pairs(pairs: &mut Vec<ScoredAlignmentPair>) {
+    // TODO use Vec::dedup(_by...)
+    if pairs.len() < 2 {
+        return;
+    }
+    let mut prev_ref_start1 = pairs[0].alignment1.ref_start;
+    let mut prev_ref_start2 = pairs[0].alignment2.ref_start;
+    let mut prev_ref_id1 = pairs[0].alignment1.reference_id;
+    let mut prev_ref_id2 = pairs[0].alignment2.reference_id;
+    let mut j = 1;
+    for i in 1..pairs.len() {
+        let ref_start1 = pairs[i].alignment1.ref_start;
+        let ref_start2 = pairs[i].alignment2.ref_start;
+        let ref_id1 = pairs[i].alignment1.reference_id;
+        let ref_id2 = pairs[i].alignment2.reference_id;
+        if  ref_start1 != prev_ref_start1 ||
+            ref_start2 != prev_ref_start2 ||
+            ref_id1 != prev_ref_id1 ||
+            ref_id2 != prev_ref_id2
+        {
+            prev_ref_start1 = ref_start1;
+            prev_ref_start2 = ref_start2;
+            prev_ref_id1 = ref_id1;
+            prev_ref_id2 = ref_id2;
+            pairs[j] = pairs[i].clone();
+            j += 1;
+        }
+    }
+    pairs.truncate(j);
 }
 
 fn count_best_alignment_pairs(pairs: &[ScoredAlignmentPair]) -> usize {
@@ -722,6 +969,58 @@ fn count_best_alignment_pairs(pairs: &[ScoredAlignmentPair]) -> usize {
         0
     } else {
         pairs.iter().take_while(|x| x.score == pairs[0].score).count()
+    }
+}
+
+fn aligned_pairs_to_sam(
+    high_scores: &[ScoredAlignmentPair],
+    max_secondary: usize,
+    secondary_dropoff: f64,
+    record1: &SequenceRecord,
+    record2: &SequenceRecord,
+    read1: &Read,
+    read2: &Read,
+    mu: f32,
+    sigma: f32,
+    details: [&Details; 2],
+) -> Vec<SamRecord> {
+
+    if high_scores.is_empty() {
+        sam.add_unmapped_pair(record1, record2);
+        return;
+    }
+
+    let (mapq1, mapq2) = joint_mapq_from_high_scores(&high_scores);
+    let best_aln_pair = &high_scores[0];
+
+
+    // append both alignments to string here
+    if max_secondary == 0 {
+        let alignment1 = best_aln_pair.alignment1;
+        let alignment2 = best_aln_pair.alignment2;
+
+        sam.add_pair(alignment1, alignment2, record1, record2, read1.rc, read2.rc, mapq1, mapq2, is_proper_pair(alignment1, alignment2, mu, sigma), true, details);
+    } else {
+        let max_out = std::min(high_scores.size(), max_secondary);
+        let is_primary = true;
+        let s_max = best_aln_pair.score;
+        for i in 0..max_out {
+            auto aln_pair = high_scores[i];
+            Alignment alignment1 = aln_pair.alignment1;
+            Alignment alignment2 = aln_pair.alignment2;
+            float s_score = aln_pair.score;
+            if i > 0 {
+                is_primary = false;
+                mapq1 = 0;
+                mapq2 = 0;
+            }
+            if s_max - s_score < secondary_dropoff {
+                bool is_proper = is_proper_pair(alignment1, alignment2, mu, sigma);
+                sam.add_pair(alignment1, alignment2, record1, record2, read1.rc, read2.rc, mapq1, mapq2, is_proper, is_primary, details);
+            } else {
+                break;
+            }
+        }
     }
 }
 
@@ -761,4 +1060,12 @@ mod tests {
         pairs[1].score = 5.0;
         assert_eq!(count_best_alignment_pairs(&pairs), 1);
     }
+}
+
+const INV_SQRT_PI: f32 = 0.3989422804014327;
+
+fn normal_pdf(x: f32, mu: f32, sigma: f32) -> f32 {
+    let a = (x - mu) / sigma;
+
+    INV_SQRT_PI / sigma * (-0.5 * a * a).exp()
 }
