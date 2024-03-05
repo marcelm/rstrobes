@@ -1,5 +1,5 @@
 use std::cmp::{min, Reverse};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem;
 use fastrand::Rng;
 use crate::aligner::{AlignmentInfo, hamming_align, hamming_distance};
@@ -196,7 +196,7 @@ impl SamOutput {
         is_proper: bool,
     ) -> [SamRecord; 2] {
         let mut sam_records = [
-            self.make_record(&alignments[0], references, &records[0], mapq[0], is_primary, details[0].clone()), // TODO clone
+            self.make_record(&alignments[0], references, &records[0], mapq[0], is_primary, details[0].clone()),
             self.make_record(&alignments[1], references, &records[1], mapq[1], is_primary, details[1].clone()),
         ];
         sam_records[0].flags |= PAIRED | READ1;
@@ -548,16 +548,16 @@ pub fn map_paired_end_read(
 
         let secondary_dropoff = 2 * aligner.scores.mismatch + aligner.scores.gap_open;
         sam_records.extend(aligned_pairs_to_sam(
-            alignment_pairs,
-            map_param.max_secondary,
-            secondary_dropoff,
+            &alignment_pairs,
+            mapping_parameters.max_secondary,
+            secondary_dropoff as f64,
             &r1,
             &r2,
             &read1,
             &read2,
             insert_size_distribution.mu,
             insert_size_distribution.sigma,
-            details
+            &details
         ));
     }
     // TODO
@@ -841,37 +841,37 @@ fn get_best_scoring_nam_pairs(
     mu: f32,
     sigma: f32,
 ) -> Vec<NamPair> {
-    let nam_pairs = vec![];
+    let mut nam_pairs = vec![];
     if nams1.is_empty() && nams2.is_empty() {
         return nam_pairs;
     }
 
     // Find NAM pairs that appear to be proper pairs
-    robin_hood::unordered_set<int> added_n1;
-    robin_hood::unordered_set<int> added_n2;
-    int best_joint_hits = 0;
-    for (auto &nam1 : nams1) {
-        for (auto &nam2 : nams2) {
-            int joint_hits = nam1.n_hits + nam2.n_hits;
-            if (joint_hits < best_joint_hits / 2) {
+    let mut added_n1 = HashSet::new();
+    let mut added_n2 = HashSet::new();
+    let mut best_joint_hits = 0;
+    for nam1 in nams1 {
+        for nam2 in nams2 {
+            let joint_hits = nam1.n_hits + nam2.n_hits;
+            if joint_hits < best_joint_hits / 2 {
                 break;
             }
-            if (is_proper_nam_pair(nam1, nam2, mu, sigma)) {
-                nam_pairs.push_back(NamPair{joint_hits, nam1, nam2});
+            if is_proper_nam_pair(nam1, nam2, mu, sigma) {
+                nam_pairs.push(NamPair{n_hits: joint_hits, nam1: *nam1, nam2: *nam2});
                 added_n1.insert(nam1.nam_id);
                 added_n2.insert(nam2.nam_id);
-                best_joint_hits = std::max(joint_hits, best_joint_hits);
+                best_joint_hits = joint_hits.max(best_joint_hits);
             }
         }
     }
 
     // Find high-scoring R1 NAMs that are not part of a proper pair
-    Nam dummy_nam;
+    let mut dummy_nam;
     dummy_nam.ref_start = -1;
     if (!nams1.empty()) {
-        int best_joint_hits1 = best_joint_hits > 0 ? best_joint_hits : nams1[0].n_hits;
-        for (auto &nam1 : nams1) {
-            if (nam1.n_hits < best_joint_hits1 / 2) {
+        let best_joint_hits1 = if best_joint_hits > 0 { best_joint_hits } else { nams1[0].n_hits };
+        for nam1 : nams1 {
+            if nam1.n_hits < best_joint_hits1 / 2 {
                 break;
             }
             if (added_n1.find(nam1.nam_id) != added_n1.end()) {
@@ -982,7 +982,7 @@ fn aligned_pairs_to_sam(
     read2: &Read,
     mu: f32,
     sigma: f32,
-    details: [&Details; 2],
+    details: &[Details; 2],
 ) -> Vec<SamRecord> {
 
     if high_scores.is_empty() {
@@ -1002,20 +1002,20 @@ fn aligned_pairs_to_sam(
         sam.add_pair(alignment1, alignment2, record1, record2, read1.rc, read2.rc, mapq1, mapq2, is_proper_pair(alignment1, alignment2, mu, sigma), true, details);
     } else {
         let max_out = std::min(high_scores.size(), max_secondary);
-        let is_primary = true;
+        let mut is_primary = true;
         let s_max = best_aln_pair.score;
         for i in 0..max_out {
-            auto aln_pair = high_scores[i];
-            Alignment alignment1 = aln_pair.alignment1;
-            Alignment alignment2 = aln_pair.alignment2;
-            float s_score = aln_pair.score;
+            let aln_pair = high_scores[i];
+            let alignment1 = aln_pair.alignment1;
+            let alignment2 = aln_pair.alignment2;
+            let s_score = aln_pair.score;
             if i > 0 {
                 is_primary = false;
                 mapq1 = 0;
                 mapq2 = 0;
             }
             if s_max - s_score < secondary_dropoff {
-                bool is_proper = is_proper_pair(alignment1, alignment2, mu, sigma);
+                let is_proper = is_proper_pair(alignment1, alignment2, mu, sigma);
                 sam.add_pair(alignment1, alignment2, record1, record2, read1.rc, read2.rc, mapq1, mapq2, is_proper, is_primary, details);
             } else {
                 break;
