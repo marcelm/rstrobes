@@ -215,7 +215,7 @@ impl SamOutput {
             self.make_record(&alignments[0], references, &records[0], mapq[0], is_primary, details[0].clone()),
             self.make_record(&alignments[1], references, &records[1], mapq[1], is_primary, details[1].clone()),
         ];
-        
+
         // Then make them paired
 
         // 1. Flags
@@ -224,7 +224,7 @@ impl SamOutput {
         for i in 0..2 {
             sam_records[i].flags |= PAIRED;
             if is_proper {
-                sam_records[i].flags |= PROPER_PAIR;   
+                sam_records[i].flags |= PROPER_PAIR;
             }
             if alignments[i].is_unaligned {
                 assert_ne!(sam_records[i].flags & UNMAP, 0);
@@ -287,7 +287,7 @@ impl SamOutput {
             sam_records[0].template_len = Some(template_len1 as i32);
             sam_records[1].template_len = Some(-template_len1 as i32);
         }
-        
+
         sam_records
     }
 }
@@ -668,7 +668,7 @@ fn align_paired(
     // Get top hit counts for all locations.
     // The joint hit count is the sum of hits of the two mates.
     // Then align as long as score dropoff or cnt < 20
-    
+
     let reads = [read1, read2];
     // Cache for already computed alignments. Maps NAM ids to alignments.
     // TODO rename
@@ -858,7 +858,7 @@ fn rescue_align(
             gapped: false,
         };
     }
-    let ref_segm = &references[mate_nam.ref_id].sequence[ref_start..ref_end - ref_start];
+    let ref_segm = &references[mate_nam.ref_id].sequence[ref_start..ref_end];
 
     if !has_shared_substring(r_tmp, ref_segm, k) {
         return Alignment {
