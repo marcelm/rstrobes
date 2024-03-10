@@ -210,66 +210,56 @@ impl SamOutput {
         is_primary: bool,
         is_proper: bool,
     ) -> [SamRecord; 2] {
+        // Create single-end records
         let mut sam_records = [
             self.make_record(&alignments[0], references, &records[0], mapq[0], is_primary, details[0].clone()),
             self.make_record(&alignments[1], references, &records[1], mapq[1], is_primary, details[1].clone()),
         ];
-        sam_records[0].flags |= PAIRED | READ1;
-        sam_records[1].flags |= PAIRED | READ2;
+        
+        // Then make them paired
 
-        let mut template_len1 = 0;
-        let both_aligned = !alignments[0].is_unaligned && !alignments[1].is_unaligned;
-        if both_aligned && alignments[0].reference_id == alignments[1].reference_id {
-            let dist = alignments[1].ref_start - alignments[0].ref_start;
-            if alignments[1].ref_start > alignments[0].ref_start {
-                template_len1 = (alignments[1].ref_start - alignments[0].ref_start + alignments[1].length) as isize;
+        // 1. Flags
+        sam_records[0].flags |= READ1;
+        sam_records[1].flags |= READ2;
+        for i in 0..2 {
+            sam_records[i].flags |= PAIRED;
+            if is_proper {
+                sam_records[i].flags |= PROPER_PAIR;   
             }
-            else {
-                template_len1 = -((alignments[0].ref_start - alignments[1].ref_start) as isize) - alignments[0].length as isize;
+            if alignments[i].is_unaligned {
+                assert_ne!(sam_records[i].flags & UNMAP, 0);
+                sam_records[1-i].flags |= MUNMAP;
+            } else if alignments[i].is_revcomp {
+                sam_records[1-i].flags |= MREVERSE;
+            }
+            if alignments[i].is_revcomp {
+                sam_records[1-i].flags |= MREVERSE;
             }
         }
-        if is_proper {
-            sam_records[0].flags |= PROPER_PAIR;
-            sam_records[1].flags |= PROPER_PAIR;
-        }
 
+        // 2. RNEXT (reference name of mate); must be "=" if identical to reference_name
         let reference_name1;
         let mut pos1 = Some(alignments[0].ref_start);
-        let edit_distance1 = alignments[0].edit_distance;
         if alignments[0].is_unaligned {
-            sam_records[0].flags |= UNMAP;
-            sam_records[1].flags |= MUNMAP;
             pos1 = None;
             reference_name1 = "*";
         } else {
-            if alignments[0].is_revcomp {
-                sam_records[0].flags |= REVERSE;
-                sam_records[1].flags |= MREVERSE;
-            }
             reference_name1 = &references[alignments[0].reference_id].name;
         }
 
         let reference_name2;
         let mut pos2 = Some(alignments[1].ref_start);
         if alignments[1].is_unaligned {
-            sam_records[1].flags |= UNMAP;
-            sam_records[0].flags |= MUNMAP;
             pos2 = None;
             reference_name2 = "*";
         } else {
-            if alignments[1].is_revcomp {
-                sam_records[0].flags |= MREVERSE;
-                sam_records[1].flags |= REVERSE;
-            }
             reference_name2 = &references[alignments[1].reference_id].name;
         }
 
-        // Reference name as used in the RNEXT field;
-        // set to "=" if identical to reference_name
         let mut mate_reference_name1 = reference_name1;
         let mut mate_reference_name2 = reference_name2;
         if
-            (!alignments[0].is_unaligned && !alignments[1].is_unaligned && alignments[0].reference_id == alignments[1].reference_id)
+        (!alignments[0].is_unaligned && !alignments[1].is_unaligned && alignments[0].reference_id == alignments[1].reference_id)
             || (alignments[0].is_unaligned != alignments[1].is_unaligned)
         {
             mate_reference_name1 = "=";
@@ -284,17 +274,20 @@ impl SamOutput {
             }
         }
 
-        if alignments[0].is_unaligned {
-            add_unmapped_mate(record1, f1, reference_name2, pos2);
-        } else {
-            add_record(record1.name, record1.comment, f1, reference_name1, alignment1.ref_start, mapq1, alignment1.cigar, mate_reference_name2, pos2, template_len1, record1.seq, read1_rc, record1.qual, edit_distance1, alignment1.score, details[0]);
+        // 4. TLEN
+        let both_aligned = !alignments[0].is_unaligned && !alignments[1].is_unaligned;
+        if both_aligned && alignments[0].reference_id == alignments[1].reference_id {
+            let template_len1 =
+                if alignments[1].ref_start > alignments[0].ref_start {
+                    (alignments[1].ref_start - alignments[0].ref_start + alignments[1].length) as isize
+                }
+                else {
+                    -((alignments[0].ref_start - alignments[1].ref_start) as isize) - alignments[0].length as isize
+                };
+            sam_records[0].template_len = Some(template_len1 as i32);
+            sam_records[1].template_len = Some(-template_len1 as i32);
         }
-        if alignments[1].is_unaligned {
-            add_unmapped_mate(record2, f2, reference_name1, pos1);
-        } else {
-            add_record(record2.name, record2.comment, f2, reference_name2, alignment2.ref_start, mapq2, alignment2.cigar, mate_reference_name1, pos1, -template_len1, record2.seq, read2_rc, record2.qual, edit_distance2, alignment2.score, details[1]);
-        }
-
+        
         sam_records
     }
 }
