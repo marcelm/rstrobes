@@ -80,7 +80,7 @@ static PROFILES: [Profile; 7] = [
 ];
 
 /* Settings that influence index creation */
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct IndexParameters {
     canonical_read_length: usize,
     pub syncmer: SyncmerParameters,

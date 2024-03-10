@@ -7,7 +7,7 @@ use crate::mapper::QueryRandstrobe;
 use crate::read::Read;
 
 /// Non-overlapping approximate match
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone,Debug)]
 pub struct Nam {
     pub nam_id: usize,
     pub ref_start: usize,
@@ -226,7 +226,7 @@ fn merge_hits_into_nams(hits_per_ref: &mut HashMap<usize, Vec<Hit>>, k: usize, s
                                 1
                             } as u32;
 //                        n_score = n.n_hits * n.query_span();
-                        let mut nam = *n;
+                        let mut nam = n.clone();
                         nam.score = n_score;
                         nams.push(nam);
                     }

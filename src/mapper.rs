@@ -312,7 +312,7 @@ pub fn map_single_end_read(
     }
     let mut sam_records = Vec::new();
     let mut alignments = Vec::new();
-    let nam_max = nams[0];
+    let nam_max = nams[0].clone();
     let mut best_edit_distance = usize::MAX;
     let mut best_score = 0;
     let mut second_best_score = 0;
@@ -402,7 +402,7 @@ fn get_nams(sequence: &[u8], index: &StrobemerIndex, mapping_parameters: &Mappin
     }
     // Timer nam_sort_timer;
 
-    nams.sort_by_key(|&k| -(k.score as i32));
+    nams.sort_by_key(|k| -(k.score as i32));
     // TODO shuffle_top_nams(nams, random_engine);
     // statistics.tot_sort_nams += nam_sort_timer.duration();
 
@@ -485,21 +485,21 @@ pub fn map_paired_end_read(
     rng: &mut Rng,
 ) -> Vec<SamRecord> {
     let mut details = [Details::default(), Details::default()];
-    let mut nams_pair = vec![vec![]];
+    let mut nams_pair = [vec![], vec![]];
 
     for is_revcomp in [0, 1] {
         let record = if is_revcomp == 0 { r1 } else { r2 };
         let (was_rescued, mut nams) = get_nams(&record.sequence, &index, &mapping_parameters);
         details[is_revcomp].nam_rescue = was_rescued;
         details[is_revcomp].nams = nams.len();
-        nams_pair.push(nams);
+        nams_pair[is_revcomp] = nams;
     }
 
     // Timer extend_timer;
     let read1 = Read::new(&r1.sequence); // TODO pass r1, r2 to align_paired instead
     let read2 = Read::new(&r2.sequence);
     let mut alignment_pairs = align_paired(
-        aligner, &mut nams_pair[0], &mut nams_pair[1], &read1, &read2,
+        aligner, &mut nams_pair, &read1, &read2,
         index_parameters.syncmer.k, references, &mut details,
         mapping_parameters.dropoff_threshold, insert_size_distribution,
         mapping_parameters.max_tries
@@ -542,7 +542,7 @@ pub fn map_paired_end_read(
             if i > 1 {
                 let random_index = rng.usize(..i);
                 if random_index != 0 {
-                    mem::swap(&mut alignment_pairs[0], &mut alignment_pairs[random_index]);
+                    alignment_pairs.swap(0, random_index);
                 }
             }
 
@@ -578,8 +578,7 @@ enum AlignedPairs {
 
 fn align_paired(
     aligner: &Aligner,
-    nams1: &mut [Nam],
-    nams2: &mut [Nam],
+    nams: &mut [Vec<Nam>; 2],
     read1: &Read,
     read2: &Read,
     k: usize,
@@ -592,19 +591,19 @@ fn align_paired(
     let mu = insert_size_distribution.mu;
     let sigma = insert_size_distribution.sigma;
 
-    if nams1.is_empty() && nams2.is_empty() {
+    if nams[0].is_empty() && nams[1].is_empty() {
          // None of the reads have any NAMs
         return AlignedPairs::WithScores(vec![]);
     }
 
-    if !nams1.is_empty() && nams2.is_empty() {
+    if !nams[0].is_empty() && nams[1].is_empty() {
         // Only read 1 has NAMS: attempt to rescue read 2
         return AlignedPairs::WithScores(rescue_read(
             read2,
             read1,
             aligner,
             references,
-            nams1,
+            &mut nams[0],
             max_tries,
             dropoff,
             details,
@@ -614,7 +613,7 @@ fn align_paired(
         ));
     }
 
-    if nams1.is_empty() && !nams2.is_empty() {
+    if nams[0].is_empty() && !nams[1].is_empty() {
         // Only read 2 has NAMS: attempt to rescue read 1
         let mut swapped_details = [details[0].clone(), details[1].clone()];
         let mut pairs = rescue_read(
@@ -622,7 +621,7 @@ fn align_paired(
             read2,
             aligner,
             references,
-            nams2,
+            &mut nams[1],
             max_tries,
             dropoff,
             &mut swapped_details,
@@ -640,12 +639,12 @@ fn align_paired(
     }
 
     // Both reads have NAMs
-    assert!(!nams1.is_empty() && !nams2.is_empty());
+    assert!(!nams[0].is_empty() && !nams[1].is_empty());
 
     // Deal with the typical case that both reads map uniquely and form a proper pair
-    if top_dropoff(&nams1) < dropoff && top_dropoff(&nams2) < dropoff && is_proper_nam_pair(&nams1[0], &nams2[0], mu, sigma) {
-        let mut n_max1 = nams1[0];
-        let mut n_max2 = nams2[0];
+    if top_dropoff(&nams[0]) < dropoff && top_dropoff(&nams[1]) < dropoff && is_proper_nam_pair(&nams[0][0], &nams[1][0], mu, sigma) {
+        let mut n_max1 = nams[0][0].clone();
+        let mut n_max2 = nams[1][0].clone();
 
         let consistent_nam1 = reverse_nam_if_needed(&mut n_max1, read1, references, k);
         details[0].nam_inconsistent += !consistent_nam1 as usize;
@@ -669,8 +668,7 @@ fn align_paired(
     // Get top hit counts for all locations.
     // The joint hit count is the sum of hits of the two mates.
     // Then align as long as score dropoff or cnt < 20
-
-    let nams = [nams1, nams2];
+    
     let reads = [read1, read2];
     // Cache for already computed alignments. Maps NAM ids to alignments.
     // TODO rename
@@ -690,7 +688,7 @@ fn align_paired(
     }
 
     // Turn pairs of high-scoring NAMs into pairs of alignments
-    let nam_pairs = get_best_scoring_nam_pairs(nams[0], nams[1], mu, sigma);
+    let nam_pairs = get_best_scoring_nam_pairs(&nams[0], &nams[1], mu, sigma);
     let mut alignment_pairs = vec![];
     let max_score = nam_pairs[0].n_hits;
     for nam_pair in nam_pairs {
@@ -709,22 +707,22 @@ fn align_paired(
         let mut alignments = [Alignment::default(), Alignment::default()];
         for i in 0..2 {
             let mut alignment;
-            if let Some(mut this_nam) = namsp[i] {
+            if let Some(mut this_nam) = namsp[i].clone() {
                 // TODO combine .contains_key + .get, avoid unwrap
                 if is_aligned[i].contains_key(&this_nam.nam_id) {
-                    alignment = is_aligned[i].get(&this_nam.nam_id).unwrap();
+                    alignment = is_aligned[i].get(&this_nam.nam_id).unwrap().clone();
                 } else {
                     let consistent_nam = reverse_nam_if_needed(&mut this_nam, reads[i], references, k);
                     details[i].nam_inconsistent += !consistent_nam as usize;
-                    alignment = &extend_seed(aligner, &this_nam, references, reads[i], consistent_nam).unwrap();
+                    alignment = extend_seed(aligner, &this_nam, references, reads[i], consistent_nam).unwrap();
                     details[i].tried_alignment += 1;
                     details[i].gapped += alignment.gapped as usize;
                     is_aligned[i].insert(this_nam.nam_id, alignment.clone());
                 }
             } else {
-                let mut other_nam = namsp[1-i].unwrap();
+                let mut other_nam = namsp[1-i].clone().unwrap();
                 details[1-i].nam_inconsistent += !reverse_nam_if_needed(&mut other_nam, reads[1-i], references, k) as usize;
-                alignment = &rescue_align(aligner, &other_nam, references, reads[i], mu, sigma, k);
+                alignment = rescue_align(aligner, &other_nam, references, reads[i], mu, sigma, k);
                 details[i].mate_rescue += !alignment.is_unaligned as usize;
                 details[i].tried_alignment += 1;
             }
@@ -777,13 +775,13 @@ fn rescue_read(
     mu: f32,
     sigma: f32
 ) -> Vec<ScoredAlignmentPair> {
-    let n_max1 = nams1[0];
+    let n_max1_hits = nams1[0].n_hits;
     let mut tries = 0;
 
     let mut alignments1 = vec![];
     let mut alignments2 = vec![];
     for nam in nams1 {
-        let score_dropoff1 = nam.n_hits as f32 / n_max1.n_hits as f32;
+        let score_dropoff1 = nam.n_hits as f32 / n_max1_hits as f32;
         // only consider top hits (as minimap2 does) and break if below dropoff cutoff.
         if tries >= max_tries || score_dropoff1 < dropoff {
             break;
@@ -881,12 +879,12 @@ fn rescue_align(
     Alignment {
         reference_id: mate_nam.ref_id,
         ref_start: ref_start + info.ref_start,
-        cigar: info.cigar,
         edit_distance: info.edit_distance,
         soft_clip_left: 0,
         soft_clip_right: 0,
         score: info.score,
         length: info.ref_span(),
+        cigar: info.cigar,
         is_revcomp: !mate_nam.is_revcomp,
         is_unaligned: false,
         gapped: true,
@@ -987,7 +985,7 @@ fn get_best_scoring_nam_pairs(
                 break;
             }
             if is_proper_nam_pair(nam1, nam2, mu, sigma) {
-                nam_pairs.push(NamPair{n_hits: joint_hits, nam1: Some(*nam1), nam2: Some(*nam2)});
+                nam_pairs.push(NamPair{n_hits: joint_hits, nam1: Some(nam1.clone()), nam2: Some(nam2.clone())});
                 added_n1.insert(nam1.nam_id);
                 added_n2.insert(nam2.nam_id);
                 best_joint_hits = joint_hits.max(best_joint_hits);

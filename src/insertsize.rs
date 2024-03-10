@@ -1,3 +1,4 @@
+/// Estimator for a normal distribution, used for insert sizes.
 pub struct InsertSizeDistribution {
     pub sample_size: usize,
     pub mu: f32,
@@ -6,9 +7,8 @@ pub struct InsertSizeDistribution {
     SSE: f32,
 }
 
-/// Estimator for a normal distribution, used for insert sizes.
-impl InsertSizeDistribution {
-    pub fn new() -> Self {
+impl Default for InsertSizeDistribution {
+    fn default() -> Self {
         InsertSizeDistribution {
             sample_size: 0,
             mu: 300.0,
@@ -16,6 +16,12 @@ impl InsertSizeDistribution {
             V: 10_000.0,
             SSE: 10_000.0,
         }
+    }
+}
+
+impl InsertSizeDistribution {
+    pub fn new() -> Self {
+        InsertSizeDistribution::default()
     }
 
     /// Add a new observation
