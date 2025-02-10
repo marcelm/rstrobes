@@ -96,6 +96,10 @@ if strobealign --create-index tests/phix.fasta > /dev/null 2> /dev/null; then fa
 strobealign --details tests/phix.fasta tests/phix.1.fastq tests/phix.2.fastq 2> /dev/null | samtools view -o /dev/null
 strobealign --details tests/phix.fasta tests/phix.1.fastq 2> /dev/null | samtools view -o /dev/null
 
+strobealign -C --no-PG --rg-id=1 --rg=SM:sample --rg=LB:library tests/phix.fasta tests/phix.tags.fastq > with-tags.sam
+diff tests/phix.tags.sam with-tags.sam
+rm with-tags.sam
+
 # Secondary alignments
 
 # No secondary alignments on phix
@@ -116,9 +120,5 @@ test $(samtools view -f 0x100 -c with-secondary.sam) -gt 0
 samtools view -h --no-PG -F 0x100 with-secondary.sam > with-secondary-only-primary.sam
 diff no-secondary.sam with-secondary-only-primary.sam
 rm no-secondary.sam with-secondary.sam with-secondary-only-primary.sam repeated-phix.fasta
-
-strobealign -C --no-PG --rg-id=1 --rg=SM:sample --rg=LB:library tests/phix.fasta tests/phix.tags.fastq > with-tags.sam
-diff tests/phix.tags.sam with-tags.sam
-rm with-tags.sam
 
 echo "Success"
