@@ -10,7 +10,7 @@ use crate::details::NamDetails;
 use crate::fasta::RefSequence;
 use crate::hit::{find_hits, Hit};
 use crate::index::StrobemerIndex;
-use crate::{hit, mapper};
+use crate::mapper;
 use crate::mapper::QueryRandstrobe;
 use crate::mcsstrategy::McsStrategy;
 use crate::read::Read;

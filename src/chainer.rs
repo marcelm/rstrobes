@@ -1,4 +1,3 @@
-use std::cmp::Reverse;
 use std::time::Instant;
 use crate::details::NamDetails;
 use crate::hit::{Hit, find_hits};
@@ -27,7 +26,7 @@ struct ChainingParameters {
 }
 
 #[derive(Debug)]
-struct Chainer {
+pub struct Chainer {
     k: usize,
     parameters: ChainingParameters,
     precomputed_scores: [f32; N_PRECOMPUTED],
@@ -35,14 +34,14 @@ struct Chainer {
 
 impl Chainer {
     pub fn new(k: usize, parameters: ChainingParameters) -> Self {
-        let mut precomputed_scores: [f32; N_PRECOMPUTED];
-        for i in 1..N_PRECOMPUTED {
+        let mut precomputed_scores = [0f32; N_PRECOMPUTED];
+        for i in 0..N_PRECOMPUTED {
             precomputed_scores[i] = compute_score(i, i, k, &parameters);
         }
         Chainer { k, parameters, precomputed_scores }
     }
 
-    fn compute_score(&self, dq: i64, dr: i64) -> f32 {
+    fn compute_score_cached(&self, dq: usize, dr: usize) -> f32 {
         // dq == dr is usually the most common case
         if dq == dr && (dq as usize) < N_PRECOMPUTED {
             self.precomputed_scores[dq]
@@ -62,8 +61,8 @@ impl Chainer {
             return (0.0, vec![], vec![]);
         }
 
-        let dp = vec![self.k as f32; n];
-        let predecessors = vec![usize::MAX; n];
+        let mut dp = vec![self.k as f32; n];
+        let mut predecessors = vec![usize::MAX; n];
         let mut best_score = 0.0;
 
         for i in 0..n {
@@ -86,12 +85,14 @@ impl Chainer {
                     continue;
                 }
 
-                let score = self.compute_score(dq, dr);
+                let score = self.compute_score_cached(dq, dr);
 
                 let new_score = dp[j] + score;
                 if new_score > dp[i] {
                     dp[i] = new_score;
                     predecessors[i] = j;
+                    // Runtime heuristic: If the predecessor is on the same diagonal,
+                    // assume that it is the best one and skip the remaining ones.
                     if dq == dr {
                         break;
                     }
@@ -105,7 +106,7 @@ impl Chainer {
         (best_score, dp, predecessors)
     }
 
-    fn get_chains(
+    pub fn get_chains(
         &self,
         query_randstrobes: &[Vec<QueryRandstrobe>; 2],
         index: &StrobemerIndex,
@@ -135,14 +136,11 @@ impl Chainer {
         let mut n_hits = nonrepetitive_hits;
         let mut n_partial_hits = partial_hits;
         let mut rescue_done = false;
-        let mut time_rescue;
-        let mut time_chaining;
+        let mut time_rescue = 0.0;
+        let mut time_chaining = 0.0;
         let mut chains = vec![];
         for is_revcomp in 0..2 {
-            let mut best_score = 0.0;
             let mut anchors = vec![];
-            let mut dp = vec![];
-            let mut predecessors = vec![];
 
             // Rescue if requested and needed
             if map_param.rescue_level > 1 && (nonrepetitive_hits == 0 || nonrepetitive_fraction < 0.7) {
@@ -154,7 +152,6 @@ impl Chainer {
                 n_rescue_hits += n_rescue_hits1;
                 n_partial_hits += n_partial_hits1;
                 n_rescue_nams += chains.len();
-                rescue_done = true;
                 time_rescue += rescue_timer.elapsed().as_secs_f64();
             } else {
                 let hits_timer = Instant::now();
@@ -162,12 +159,10 @@ impl Chainer {
                 time_find_hits += hits_timer.elapsed().as_secs_f64();
             }
             let chaining_timer = Instant::now();
-            pdqsort_branchless(anchors.begin(), anchors.end());
-            anchors.erase(
-                std::unique(anchors.begin(), anchors.end()), anchors.end()
-            );
-            let (score, dp, predecessors) = self.collinear_chaining(&anchors);
-            best_score = score;
+            // TODO this used to be pdqsort
+            anchors.sort_by_key(|a| (a.ref_id, a.ref_start, a.query_start));
+            anchors.dedup();
+            let (best_score, dp, predecessors) = self.collinear_chaining(&anchors);
 
             extract_chains_from_dp(
                 &anchors, &dp, &predecessors, best_score,
@@ -177,43 +172,42 @@ impl Chainer {
         }
         let details = NamDetails {
             n_reads: 1,
-            n_randstrobes,
+            n_randstrobes: 0,  // TODO
             n_nams: chains.len(),
             n_rescue_nams,
             nam_rescue: rescue_done as usize,
             n_hits: nonrepetitive_hits,
             n_partial_hits: partial_hits,
             n_rescue_hits,
-            time_randstrobes,
+            time_randstrobes: 0f64,
             time_find_hits,
             time_chaining,
             time_rescue,
-            time_sort_nams,
+            time_sort_nams: 0f64,
         };
 
         (details, chains)
     }
 }
 
-/**
-* @brief Compute the chaining score between two anchors based on their distance.
-*
-* This function calculates the score contribution when chaining two anchors,
-* considering their relative positions on the query and reference sequences.
-* It penalizes large gaps and diagonal differences to encourage collinear chains.
-*
-* @param dq Difference in query start positions between anchor i and anchor j
-*           (i.e., ai.query_start - aj.query_start). Must be > 0.
-* @param dr Difference in reference start positions between anchor i and anchor j
-*           (i.e., ai.ref_start - aj.ref_start). Must be > 0.
-* @param k  Length of the k-mer used to form the anchor.
-* @param chaining_params Parameters controlling penalties:
-*        - diag_diff_penalty: Multiplier for the absolute difference |dr - dq|, penalizing non-diagonal moves.
-*        - gap_length_penalty: Multiplier for min(dq, dr), penalizing longer gaps.
-*
-* @return A float representing the score for chaining the two anchors.
-*/
-fn compute_score(dq: i32, dr: i32, k: i32, parameters: &ChainingParameters) -> f32 {
+
+/// Returns the chaining score between two anchors based on their distance.
+///
+/// This function calculates the score contribution when chaining two anchors,
+/// considering their relative positions on the query and reference sequences.
+/// It penalizes large gaps and diagonal differences to encourage collinear chains.
+///
+/// # Parameters
+///
+/// - `dq`: Difference in query start positions between anchor i and anchor j
+///   (i.e., ai.query_start - aj.query_start). Must be > 0.
+/// - `dr`: Difference in reference start positions between anchor i and anchor j
+///   (i.e., ai.ref_start - aj.ref_start). Must be > 0.
+/// - `k`: Length of the k-mer used to form the anchor.
+/// - `chaining_params`: Parameters controlling penalties:
+///   - `diag_diff_penalty`: Multiplier for the absolute difference |dr - dq|, penalizing non-diagonal moves.
+///   - `gap_length_penalty`: Multiplier for min(dq, dr), penalizing longer gaps.
+fn compute_score(dq: usize, dr: usize, k: usize, parameters: &ChainingParameters) -> f32 {
     let dd = dr.abs_diff(dq);
     let dg = dq.min(dr);
     let mut score = k.min(dg) as f32;
