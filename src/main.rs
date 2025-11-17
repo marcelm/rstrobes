@@ -181,6 +181,32 @@ struct Args {
     #[arg(short = 'L', default_value_t = Scores::default().end_bonus, value_name = "N", help_heading = "Alignment")]
     end_bonus: u32,
 
+    //args::Flag nams(parser, "nams", "Use NAMs instead of collinear chaining for alignments", {"nams"});
+
+    /// Collinear chaining look back heuristic
+    #[arg(short = 'H', default_value_t = 50, value_name = "N", help_heading = "Collinear chaining")]
+    max_lookback: usize,
+
+    /// Collinear chaining diagonal gap cost
+    #[arg(long = "gd", default_value = 0.1, help_heading = "Collinear chaining")]
+    diag_diff_penalty: f32,
+
+    /// Collinear chaining gap length cost
+    #[arg(long = "gl", default_value = 0.05, help_heading = "Collinear chaining")]
+    gap_length_penalty: f32,
+
+    /// Collinear chaining best chain score threshold
+    #[arg(long = "vp", default_value = 0.7, help_heading = "Collinear chaining")]
+    valid_score_threshold: f32,
+
+    /// Collinear chaining skip distance, how far on the reference do we allow anchors to chain
+    #[arg(long = "sg", default_value = 10000, help_heading = "Collinear chaining")]
+    max_ref_gap: usize,
+
+    /// Weight given to the number of anchors for the final score of chains
+    #[arg(long = "mw", default_value = 0.01, help_heading = "Collinear chaining")]
+    matches_weight: f32,
+
     /// Multi-context seed strategy for finding hits
     #[arg(long = "mcs", value_enum, default_value_t = McsStrategy::default(), help_heading = "Search parameters")]
     mcs_strategy: McsStrategy,
@@ -320,6 +346,14 @@ fn main() -> Result<(), CliError> {
         .. MappingParameters::default()
     };
 
+    let chaining_parameters = ChainingParameters {
+        max_lookback: args.max_lookback,
+        diag_diff_penalty: args.diag_diff_penalty,
+        gap_length_penalty: args.gap_length_penalty,
+        valid_score_threshold: args.valid_score_threshold,
+        max_ref_gap: args.max_ref_gap,
+        matches_weight: args.matches_weight,
+    };
     let scores = Scores {
         match_: args.match_score,
         mismatch: args.mismatch_score,
@@ -328,8 +362,10 @@ fn main() -> Result<(), CliError> {
         end_bonus: args.end_bonus,
     };
     debug!("{:?}", &mapping_parameters);
+    debug!("{:?}", &chaining_parameters);
     debug!("{:?}", &scores);
 
+    let chainer = Chainer::new(index.k(), chaining_parameters);
     let aligner = Aligner::new(scores);
 
     let cmd_line = env::args().skip(1).collect::<Vec<_>>().join(" ");
