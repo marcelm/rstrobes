@@ -232,8 +232,9 @@ fn add_to_anchors_full(
     mut position: usize,
 ) {
     let mut min_length_diff = usize::MAX;
+    let hash = index.randstrobes[position].hash();
     for randstrobe in &index.randstrobes[position..] {
-        if randstrobe.hash() != index.randstrobes[position].hash() {
+        if randstrobe.hash() != hash {
             break;
         }
         let ref_start = randstrobe.position();
@@ -245,7 +246,6 @@ fn add_to_anchors_full(
             anchors.push(Anchor {ref_id, ref_start: ref_end - index.k(), query_start: query_end - index.k()});
             min_length_diff = length_diff;
         }
-        position += 1;
     }
 }
 
